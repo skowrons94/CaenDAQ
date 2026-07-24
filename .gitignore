@@ -1,0 +1,6 @@
+/build/
+/.cache/
+/data/
+compile_commands.json
+*.so
+__pycache__/
