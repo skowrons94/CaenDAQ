@@ -32,6 +32,7 @@ public:
     std::uint64_t eventsDecoded() const { return events_.load(); }
     std::uint64_t blocksDropped() const { return queue_.dropped(); }
     std::uint64_t corruptAggregates() const { return decoder_.corruptCount(); }
+    std::uint64_t boardFailures() const { return decoder_.boardFailCount(); }
 
 private:
     void loop();

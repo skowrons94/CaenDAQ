@@ -77,31 +77,61 @@ bool MockDigitizer::read(const char** data, std::size_t* size) {
     nextEmit_ += period;
 
     // Fabricate ONE valid V1730 DPP-PSD board aggregate so the whole chain
-    // (RUReader-readable file + online decoder) sees real events. Layout matches
-    // the vendored decoder: Charge + TS enabled, no extras/trace.
+    // (RUReader-readable file + online decoder) sees real events. When waveforms
+    // are enabled the events also carry a synthetic trace (Trace flag + samples),
+    // exactly as a real board configured for waveform recording would.
     //   couple 0 -> channels 0/1 (via the CH bit), qshort/qlong ~ a soft peak.
-    const std::uint32_t nEvents = 16 + (nextRand() % 48); // 16..63 events
-    const std::uint32_t coupleSize = 2 + nEvents * 2;     // hdr(2) + evtSize(2) each
-    const std::uint32_t aggLen     = 4 + coupleSize;      // 4-word board-agg header
+    const bool          trace     = opt_.waveforms && opt_.traceSamples >= 2;
+    const std::uint32_t nSamp     = trace ? (opt_.traceSamples & ~0xFu) : 0u; // multiple of 16
+    const std::uint32_t nTraceW   = nSamp / 2;              // 2 samples / word
+    const std::uint32_t evtSize   = 2 + nTraceW;            // TS + [trace] + charge
+    const std::uint32_t nEvents   = 8 + (nextRand() % 24);  // 8..31 events
+    const std::uint32_t coupleSize = 2 + nEvents * evtSize; // fmt(2) + events
+    const std::uint32_t aggLen     = 4 + coupleSize;        // 4-word board-agg header
+
+    // Grow the scratch buffer if this aggregate needs more room.
+    if (buffer_.size() < static_cast<std::size_t>(aggLen) * sizeof(std::uint32_t))
+        buffer_.resize(static_cast<std::size_t>(aggLen) * sizeof(std::uint32_t));
 
     auto* w = reinterpret_cast<std::uint32_t*>(buffer_.data());
     std::size_t k = 0;
+    const std::uint32_t fail =
+        (opt_.failEvery && (nextRand() % opt_.failEvery == 0u)) ? 1u : 0u; // board-FAIL (off by default)
     w[k++] = 0xA0000000u | (aggLen & 0x0FFFFFFFu);   // sync + length
-    w[k++] = (0u << 27) | 0x01u;                     // board 0, channelMask = couple 0
+    w[k++] = (0u << 27) | (fail << 26) | 0x01u;      // board 0, [FAIL], channelMask = couple 0
     w[k++] = static_cast<std::uint32_t>(counter_ & 0x7FFFFF); // aggregate counter
     w[k++] = static_cast<std::uint32_t>(counter_);            // aggregate time tag
     w[k++] = coupleSize;                             // couple-aggregate size
-    w[k++] = (1u << 30) | (1u << 29);               // data format: Charge + TS
+    // data format: Charge(30) + TS(29) [+ Trace(27) + NumSamples cfg in bits 0..15]
+    std::uint32_t fmt = (1u << 30) | (1u << 29);
+    if (trace) fmt |= (1u << 27) | ((nSamp / 8u) & 0xFFFFu); // NumSamples cfg = samples/8
+    w[k++] = fmt;
 
     for (std::uint32_t e = 0; e < nEvents; ++e) {
         const std::uint32_t chBit = e & 1u;          // alternate channel 0/1
         const std::uint32_t ts    = static_cast<std::uint32_t>(counter_ * 1000 + e) & 0x7FFFFFFFu;
+        w[k++] = (chBit << 31) | (ts & 0x7FFFFFFFu);              // time word (+CH bit)
+
+        if (trace) {
+            // Synthetic pulse: flat baseline, quick rise, linear decay (14-bit).
+            for (std::uint32_t s = 0; s < nSamp; s += 2) {
+                auto sample = [&](std::uint32_t idx) -> std::uint32_t {
+                    int v = 1000; // baseline
+                    if (idx >= 20 && idx < 30)      v = 1000 + (idx - 20) * 250;      // rise
+                    else if (idx >= 30)             v = 3500 - static_cast<int>((idx - 30) * 30); // decay
+                    if (v < 300)   v = 300;
+                    if (v > 16383) v = 16383;
+                    return static_cast<std::uint32_t>(v);
+                };
+                w[k++] = (sample(s) & 0x3FFFu) | ((sample(s + 1) & 0x3FFFu) << 16);
+            }
+        }
+
         // qlong ~ soft peak near 6000 (sum of uniforms ≈ Gaussian); qshort ≈ qlong/2.
         const std::uint32_t noise = (nextRand() % 800) + (nextRand() % 800) + (nextRand() % 800);
         const std::uint32_t qlong  = (4800u + noise) & 0xFFFFu;
         const std::uint32_t qshort = (qlong / 2) & 0x7FFFu;
         const std::uint32_t pileup = (nextRand() % 20u == 0u) ? 1u : 0u; // ~5% pile-up
-        w[k++] = (chBit << 31) | (ts & 0x7FFFFFFFu);              // time word (+CH bit)
         w[k++] = qshort | (pileup << 15) | (qlong << 16);         // charge word (+PU bit)
     }
     ++counter_;

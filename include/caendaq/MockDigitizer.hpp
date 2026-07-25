@@ -20,6 +20,9 @@ public:
         std::size_t   minBytes   = 4096;    // smallest fabricated buffer
         std::size_t   maxBytes   = 65536;   // largest fabricated buffer
         std::uint32_t ratePerSec = 200;     // buffers produced per second
+        bool          waveforms  = false;   // emit a synthetic trace per event
+        std::uint32_t traceSamples = 128;   // samples per trace when enabled (mult. of 16)
+        std::uint32_t failEvery   = 0;      // set the board-FAIL bit ~1/failEvery aggregates (0 = never)
     };
 
     MockDigitizer(BoardParams params, Options opt);

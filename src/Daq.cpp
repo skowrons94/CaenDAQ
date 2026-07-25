@@ -19,6 +19,8 @@ std::unique_ptr<IDigitizer> Daq::makeDigitizer(const BoardSpec& spec) const {
     if (spec.mock) {
         MockDigitizer::Options opt;
         opt.ratePerSec = spec.mockRate;
+        opt.waveforms  = spec.mockWaveforms;
+        opt.failEvery  = spec.mockFailEvery;
         return std::make_unique<MockDigitizer>(spec.params, opt);
     }
 #ifdef CAENDAQ_WITH_CAEN
@@ -103,6 +105,7 @@ std::vector<BoardSample> Daq::sampleStats() const {
         BoardSample bs;
         bs.name         = r->name();
         bs.bytesWritten = r->bytesWritten();
+        bs.boardFail    = r->boardFailures();
         HistogramStore& h = r->histograms();
         for (const auto& bc : h.channels()) {
             ChannelSample cs;
@@ -118,6 +121,12 @@ std::vector<BoardSample> Daq::sampleStats() const {
 
 std::vector<BoardRate> Daq::stats() const {
     return stats_ ? stats_->snapshot() : std::vector<BoardRate>{};
+}
+
+void Daq::setGraphite(const std::string& host, int port) {
+    opt_.graphiteHost = host;
+    opt_.graphitePort = port;
+    if (stats_) stats_->setGraphite(host, port);
 }
 
 const std::string& Daq::boardName(int board) const {
@@ -145,6 +154,9 @@ std::uint64_t Daq::commErrors(int board) const {
 }
 std::uint64_t Daq::eventsDecoded(int board) const {
     return runners_.at(static_cast<std::size_t>(board))->eventsDecoded();
+}
+std::uint64_t Daq::boardFailures(int board) const {
+    return runners_.at(static_cast<std::size_t>(board))->boardFailures();
 }
 
 } // namespace caendaq

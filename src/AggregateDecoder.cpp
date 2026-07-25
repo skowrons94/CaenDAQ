@@ -49,6 +49,7 @@ std::size_t AggregateDecoder::decode(const char* data, std::size_t nbytes,
 
         const std::uint32_t board = (buf[offset + 1] & 0xF8000000u) >> 27;
         std::bitset<8> mask(buf[offset + 1] & 0xFF);
+        if ((buf[offset + 1] >> 26) & 0x1u) ++boardFail_; // board-FAIL bit
 
         auto it = boards_.find(board);
         if (it != boards_.end() && it->second.supported) {

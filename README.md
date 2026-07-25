@@ -136,16 +136,59 @@ Carbon lines match LunaSpy's naming: `ancillary.rates.<board>.bo_<b>.ch_<c>.tota
 (plus `pileRate`/`lostRate`/`satuRate`, and `<board>.writeRate`). `write=False`
 gives a monitoring-only run (spectra + rates, no `.caendat` files).
 
-## Python module (WebDAQ integration)
+### Board health / failure
 
-Build the pybind11 module and use the DAQ as an in-process instance — no socket,
-no ROOT on the C++ side, histograms come back as numpy arrays:
+The decoder watches the **board-FAIL bit** (bit 26 of every board-aggregate
+header) — the digitizer signalling it could not sustain the readout (buffer-full
+/ internal error / lost link). It's exposed to Python and **resets every run** (a
+fresh `DAQ` is built per run):
+
+```python
+daq.board_failures(0)        # cumulative FAIL aggregates on board 0 this run (0 = healthy)
+daq.stats()[0]["failed"]     # True once any FAIL was seen; also ["board_failures"]
+caendaq.board_fail_meaning() # human-readable explanation of what a failure means
+```
+
+So the server can watch `board_failures`/`failed` during a run to drive alerts /
+auto-restart, without touching the boards itself.
+
+## Install the Python module (`import caendaq`)
+
+Install it **into the exact Python environment that runs your app** (e.g. the
+`luna` conda env). Two ways:
+
+### A. pip (recommended)
+
+Builds via CMake (scikit-build-core) and installs into that env's site-packages:
+
+```bash
+conda activate luna              # the env your server runs in
+pip install .                    # mock-only backend (works anywhere, TEST_FLAG=True)
+# ...with real CAEN hardware (needs libCAENDigitizer + jsoncpp):
+pip install . --config-settings=cmake.define.CAENDAQ_WITH_CAEN=ON
+```
+
+Verify (in the same env): `python -c "import caendaq; print(caendaq.__file__)"`.
+
+### B. CMake + manual install
 
 ```bash
 cmake -S . -B build -DCAENDAQ_BUILD_PYTHON=ON \
-      -Dpybind11_DIR="$(python3 -m pybind11 --cmakedir)"
-cmake --build build -j          # produces build/caendaq.*.so
+      -Dpybind11_DIR="$(python -m pybind11 --cmakedir)" \
+      -DCAENDAQ_WITH_CAEN=ON            # drop for a mock-only build
+cmake --build build -j                 # produces build/caendaq.*.so
+install -m 755 build/caendaq*.so "$(python -c 'import site; print(site.getsitepackages()[0])')/"
 ```
+
+> The module MUST land in the site-packages of the **same** interpreter that
+> launches the server. A frequent trap is building in one env and starting the
+> server from another — then `import caendaq` fails. `python -c "import caendaq"`
+> from your server's activated env is the definitive check.
+
+## Using the module (WebDAQ integration)
+
+Use the DAQ as an in-process instance — no socket, no ROOT on the C++ side,
+histograms come back as numpy arrays:
 
 ```python
 import caendaq

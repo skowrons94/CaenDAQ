@@ -48,6 +48,19 @@ std::vector<BoardRate> StatsCollector::snapshot() const {
     return latest_;
 }
 
+void StatsCollector::setGraphite(const std::string& host, int port) {
+    std::lock_guard<std::mutex> lk(graphiteMtx_);
+    if (host.empty()) {
+        graphite_.reset();
+        LOG_INFO("StatsCollector: Graphite disabled");
+    } else {
+        graphite_ = std::make_unique<GraphiteClient>(host, port);
+        LOG_INFO("StatsCollector: Graphite target -> " << host << ":" << port);
+    }
+    opt_.graphiteHost = host;
+    opt_.graphitePort = port;
+}
+
 void StatsCollector::loop() {
     using clock = std::chrono::steady_clock;
 
@@ -86,6 +99,7 @@ void StatsCollector::loop() {
         for (const auto& b : cur) {
             BoardRate br;
             br.name = b.name;
+            br.boardFail = b.boardFail; // cumulative, passed through (not a rate)
             const std::uint64_t pb = prevBytes.count(b.name) ? prevBytes[b.name] : b.bytesWritten;
             br.writeRate = (b.bytesWritten >= pb) ? (b.bytesWritten - pb) / dt : 0.0;
 
@@ -110,8 +124,11 @@ void StatsCollector::loop() {
             latest_ = rates;
         }
 
-        if (graphite_ && graphite_->enabled()) {
-            graphite_->send(formatGraphite(rates, static_cast<long long>(std::time(nullptr))));
+        {
+            std::lock_guard<std::mutex> lk(graphiteMtx_);
+            if (graphite_ && graphite_->enabled()) {
+                graphite_->send(formatGraphite(rates, static_cast<long long>(std::time(nullptr))));
+            }
         }
 
         prev = std::move(cur);

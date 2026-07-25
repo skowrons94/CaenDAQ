@@ -15,6 +15,19 @@ void HistogramStore::fill(const DecodedEvent& e) {
         if (c.qlong.empty())  c.qlong.assign(kQLongBins, 0);
         if (e.qshort < kQShortBins) ++c.qshort[e.qshort];
         ++c.qlong[e.qlong]; // qlong is 16-bit, always within kQLongBins
+
+        // 2D DPP-PSD histogram: x = qlong (charge), y = PSD ratio 1 - qs/ql.
+        if (e.qlong > 0) {
+            if (c.psd.empty()) c.psd.assign(kPsdXBins * kPsdYBins, 0);
+            std::size_t xb = (static_cast<std::uint64_t>(e.qlong) * kPsdXBins) / kQLongMax;
+            if (xb >= kPsdXBins) xb = kPsdXBins - 1;
+            double ratio = 1.0 - static_cast<double>(e.qshort) / static_cast<double>(e.qlong);
+            if (ratio < 0.0) ratio = 0.0;
+            if (ratio > 1.0) ratio = 1.0;
+            std::size_t yb = static_cast<std::size_t>(ratio * kPsdYBins);
+            if (yb >= kPsdYBins) yb = kPsdYBins - 1;
+            ++c.psd[xb * kPsdYBins + yb];
+        }
     }
     if (e.wave.samples && e.wave.length) {
         c.lastWave.assign(e.wave.samples, e.wave.samples + e.wave.length);
@@ -46,6 +59,12 @@ std::vector<std::uint32_t> HistogramStore::qlong(std::uint16_t board, std::uint1
     std::lock_guard<std::mutex> lk(mtx_);
     const Channel* c = find(board, ch);
     return c ? c->qlong : std::vector<std::uint32_t>{};
+}
+
+std::vector<std::uint32_t> HistogramStore::psd(std::uint16_t board, std::uint16_t ch) const {
+    std::lock_guard<std::mutex> lk(mtx_);
+    const Channel* c = find(board, ch);
+    return c ? c->psd : std::vector<std::uint32_t>{};
 }
 
 std::vector<std::int16_t> HistogramStore::waveform(std::uint16_t board, std::uint16_t ch) const {

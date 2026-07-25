@@ -23,6 +23,8 @@ struct BoardSpec {
     bool          decode     = false;      // enable the parallel decode tap
     bool          write      = true;       // write .caendat files (false = decode-only)
     std::uint32_t mockRate   = 200;        // mock buffers/s (mock only)
+    bool          mockWaveforms = false;   // mock: emit a synthetic trace per event
+    std::uint32_t mockFailEvery = 0;       // mock: inject a board-FAIL ~1/N aggregates (0 = never)
 };
 
 class Daq {
@@ -68,10 +70,17 @@ public:
     std::uint64_t blocksDropped(int board) const;
     std::uint64_t commErrors(int board) const;
     std::uint64_t eventsDecoded(int board) const;
+    // Cumulative count of board-FAIL aggregates this run (0 = healthy). Resets
+    // every run because a fresh Daq is built per run.
+    std::uint64_t boardFailures(int board) const;
 
     // Latest per-board / per-channel rates (events/pileup/lost/satu per second,
     // and file write rate). Empty until a run with decode has been started.
     std::vector<BoardRate> stats() const;
+
+    // Change the Graphite/Carbon target for the running stats collector (empty
+    // host disables it). No-op if no run is active.
+    void setGraphite(const std::string& host, int port);
 
 private:
     std::unique_ptr<IDigitizer> makeDigitizer(const BoardSpec& spec) const;

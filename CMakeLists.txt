@@ -101,6 +101,8 @@ if(CAENDAQ_BUILD_PYTHON)
     pybind11_add_module(caendaq_py python/bindings.cpp)
     set_target_properties(caendaq_py PROPERTIES OUTPUT_NAME caendaq)
     target_link_libraries(caendaq_py PRIVATE caendaq)
+    # Install rule so `pip install .` (scikit-build-core) packages the module.
+    install(TARGETS caendaq_py LIBRARY DESTINATION .)
     message(STATUS "CaenDAQ: Python module enabled")
 endif()
 

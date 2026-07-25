@@ -59,6 +59,7 @@ public:
     bool          decoding()       const { return decodeStage_ != nullptr; }
     std::uint64_t eventsDecoded()  const { return decodeStage_ ? decodeStage_->eventsDecoded() : 0; }
     std::uint64_t decodeDropped()  const { return decodeStage_ ? decodeStage_->blocksDropped() : 0; }
+    std::uint64_t boardFailures()  const { return decodeStage_ ? decodeStage_->boardFailures() : 0; }
     HistogramStore&       histograms()       { return histograms_; }
     const HistogramStore& histograms() const { return histograms_; }
 

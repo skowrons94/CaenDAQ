@@ -1,0 +1,24 @@
+[build-system]
+requires = ["scikit-build-core>=0.8", "pybind11>=2.10"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "caendaq"
+version = "0.1.0"
+description = "Portable CAEN digitizer DAQ (acquisition, .caendat writing, online decode, statistics)"
+requires-python = ">=3.8"
+dependencies = ["numpy"]
+
+[tool.scikit-build]
+# Build only the Python module (skip the CLI/tests) when installing via pip.
+cmake.args = [
+    "-DCAENDAQ_BUILD_PYTHON=ON",
+    "-DCAENDAQ_BUILD_CLI=OFF",
+    "-DCAENDAQ_BUILD_TESTS=OFF",
+]
+wheel.expand-macos-universal-tags = true
+
+# Real CAEN hardware support (needs libCAENDigitizer + jsoncpp) is OFF by default
+# so `pip install .` works anywhere (mock backend, usable with TEST_FLAG=True).
+# Enable it with:
+#   pip install . --config-settings=cmake.define.CAENDAQ_WITH_CAEN=ON

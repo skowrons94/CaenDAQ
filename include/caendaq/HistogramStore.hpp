@@ -22,6 +22,10 @@ public:
     static constexpr std::size_t kEnergyBins = 32768;
     static constexpr std::size_t kQShortBins = 32768;
     static constexpr std::size_t kQLongBins  = 65536;
+    // 2D DPP-PSD plot: x = qlong (charge), y = PSD ratio 1 - qshort/qlong in [0,1].
+    static constexpr std::size_t kPsdXBins   = 2048;
+    static constexpr std::size_t kPsdYBins   = 256;
+    static constexpr std::uint32_t kQLongMax = 65536; // x-axis range
 
     // Cumulative per-channel counters, for rate computation downstream.
     struct Counts {
@@ -37,6 +41,9 @@ public:
     std::vector<std::uint32_t> energy(std::uint16_t board, std::uint16_t ch) const;
     std::vector<std::uint32_t> qshort(std::uint16_t board, std::uint16_t ch) const;
     std::vector<std::uint32_t> qlong (std::uint16_t board, std::uint16_t ch) const;
+    // Flattened 2D PSD histogram (row-major, kPsdXBins rows × kPsdYBins cols).
+    // Empty until the channel receives a PSD event.
+    std::vector<std::uint32_t> psd(std::uint16_t board, std::uint16_t ch) const;
     std::vector<std::int16_t>  waveform(std::uint16_t board, std::uint16_t ch) const;
     std::uint64_t              events(std::uint16_t board, std::uint16_t ch) const;
     Counts                     counts(std::uint16_t board, std::uint16_t ch) const;
@@ -51,6 +58,7 @@ private:
         std::vector<std::uint32_t> energy;
         std::vector<std::uint32_t> qshort;
         std::vector<std::uint32_t> qlong;
+        std::vector<std::uint32_t> psd;      // flattened kPsdXBins × kPsdYBins
         std::vector<std::int16_t>  lastWave;
         Counts                     counts;
     };

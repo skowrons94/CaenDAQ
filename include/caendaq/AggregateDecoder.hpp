@@ -57,10 +57,15 @@ private:
 
     std::map<std::uint32_t, BoardDec> boards_;
     std::vector<std::int16_t>         wave_;   // reusable trace buffer
-    std::uint64_t                     corrupt_ = 0; // count of skipped/corrupt aggregates
+    std::uint64_t                     corrupt_   = 0; // skipped/corrupt aggregates
+    std::uint64_t                     boardFail_ = 0; // aggregates with the board-fail bit set
 
 public:
     std::uint64_t corruptCount() const { return corrupt_; }
+    // Number of aggregates whose header carried the board-FAIL bit (bit 26):
+    // the board signalled it could not sustain the readout (buffer/internal
+    // error). Cumulative for the life of this decoder (i.e. one run).
+    std::uint64_t boardFailCount() const { return boardFail_; }
 };
 
 } // namespace caendaq
