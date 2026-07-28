@@ -1,21 +1,26 @@
 # CaenDAQ
 
-A small, portable (Linux + Windows) C++17 DAQ for CAEN digitizers, intended to
-replace the XDAQ + Docker + LunaSpy + socket chain used by WebDAQ. No XDAQ, no
-Docker, no I2O, no ROOT on the C++ side.
+A small, portable, in-process C++17 DAQ for CAEN digitizers, used by WebDAQ. It
+reads the boards, writes `.caendat` files and decodes events to online spectra —
+no I2O, no sockets, no ROOT on the C++ side.
 
 ## Design
 
 ```
-  CAEN board ─► IDigitizer      reader thread ─┬─► BlockQueue ─► writer thread
-                (CaenDigitizer/  (tight read(), │   (must not      (RawFileWriter:
-                 MockDigitizer)   never blocks)  │    drop)          .caendat + XDAQ header
-                                                 │                   + size splitting)
-                                                 └─► DecodeStage (best-effort tap, own thread)
-                                                     AggregateDecoder ─► HistogramStore
-                                                     (PHA/PSD/waveform)  (spectra + waveforms,
-                                                                          thread-safe snapshots)
+  board 0 ─► IDigitizer  reader ─┐
+  board 1 ─► IDigitizer  reader ─┼─► ONE shared BlockQueue ─► ONE writer thread
+             (CaenDigitizer/     │   (must not drop)           (RawFileWriter: one
+              MockDigitizer)     │                              unified .caendat, XDAQ
+                                 │                              multi-board header, splitting)
+                                 └─► DecodeStage (per board, best-effort tap, own thread)
+                                     AggregateDecoder ─► HistogramStore
+                                     (PHA/PSD/waveform)  (spectra + waveforms,
+                                                          thread-safe snapshots)
 ```
+
+All boards stream into ONE unified `.caendat` (each CAEN aggregate self-identifies
+its board), exactly like the XDAQ ReadoutUnit — not one file per board. Decoding
+stays per board (its own HistogramStore).
 
 * **`IDigitizer`** — hardware abstraction. Lifecycle mirrors the proven CAEN
   sequence: `open → configure → start → read* → stop → close`. No method throws;
@@ -28,14 +33,15 @@ Docker, no I2O, no ROOT on the C++ side.
 * **`BlockQueue`** — bounded, thread-safe queue decoupling the time-critical
   reader from disk I/O. Full-queue blocks are dropped and **counted**, never
   silently lost, so a slow disk can't overflow memory or stall the board.
-* **`RawFileWriter`** — appends the raw board buffer to
-  `<dir>/ru_<board>_run<N>_<cyc>.caendat`, writes the XDAQ header on the first
-  file, and rolls to a new cycle file past a configurable size limit.
+* **`RawFileWriter`** — appends every board's raw buffers to one unified
+  `<dir>/run_<N>_<part>.caendat`, writes the XDAQ multi-board header on the first
+  file, and rolls to a new part file past a configurable size limit. Never
+  overwrites an existing file (appends `_1`/`_2`/… if the name is taken).
 * **`DecodeStage` / `AggregateDecoder` / `HistogramStore`** — the optional
   parallel decode tap (see below). Best-effort, so it never slows readout.
-* **`BoardRunner`** — wires one board's reader + writer (+ optional decode)
-  together. Every thread body is wrapped so no exception can escape and crash the
-  process.
+* **`BoardRunner`** — wires one board's reader (+ optional decode) and pushes its
+  buffers to the shared writer queue owned by `Daq`. Every thread body is wrapped
+  so no exception can escape and crash the process.
 
 ### On-disk format (`.caendat`)
 
@@ -151,6 +157,80 @@ caendaq.board_fail_meaning() # human-readable explanation of what a failure mean
 
 So the server can watch `board_failures`/`failed` during a run to drive alerts /
 auto-restart, without touching the boards itself.
+
+## Multi-board synchronisation
+
+There is **no API option for this**. Whether a board takes part in a
+synchronised start is decided by the board's *own* configuration — Acquisition
+Control (`0x8100`) bits[1:0], as written by whoever produced the register dump
+(in LUNA's case, the WebDAQ dashboard). CaenDAQ only reads it back and does the
+right thing:
+
+| `0x8100[1:0]` | What CaenDAQ does |
+|---|---|
+| `00` SW controlled | `SWStartAcquisition()` — the board runs immediately |
+| `10` first trigger | **arm** it (`0x8100[2]=1`) and wait for TRG-IN |
+| `01` S-IN/GPI, `11` LVDS | **arm** it and wait for the external signal |
+
+Then, once **every** board is armed, the master fires a software trigger:
+
+```
+  board 0  MASTER              board 1               board 2
+  first-trigger mode           first-trigger mode    first-trigger mode
+  SendSWTrigger() ──TRG-OUT──► TRG-IN ──TRG-OUT──►   TRG-IN
+```
+
+That pulse is not acquired as an event; it just releases the run, so every board
+starts on the same edge and shares one time origin.
+
+### Ordering
+
+The software trigger is sent **after the arming loop**, never during it. Arming
+board 0 and triggering it immediately would start the chain while boards 1..N
+were still being armed — they would miss the edge and begin late, with a
+different time origin.
+
+### The master
+
+The board that fires the trigger is the one whose **board register id is 0**
+(the CAEN convention). If no board reports id 0, the first synchronised board is
+used instead. See `Daq::masterIndex()`.
+
+### Notes
+
+- Cable **TRG-OUT of each board into TRG-IN of the next**, in the order the
+  boards were added.
+- Leave a board in *SW controlled* mode to keep it out of the chain; it starts on
+  its own and its timestamps are not comparable with the rest.
+- *Run/Start/Stop Delay* (`0x8170`) compensates propagation down a long chain.
+  It is a plain register — set it in the configuration like any other.
+- After an auto-reconnect a synchronised board is **re-armed**, not restarted:
+  it can only resume on the next start signal, and CaenDAQ logs a warning saying
+  so.
+
+Each board's resulting role is reported in `board_info(i)["sync_role"]`
+(`master` / `slave` / `independent`) and its mode in `["start_mode_name"]`.
+
+## Board information & provenance
+
+`board_info(i)` returns everything the CAEN API knows about a board plus the
+acquisition registers **read back from the hardware** after configuration —
+intended to be stored verbatim in run metadata so a run is reproducible from
+the record alone:
+
+```python
+caendaq.__version__          # which build of this module took the data
+caendaq.HAS_CAEN             # False for a mock-only build
+
+daq.board_info(0)
+# {'model_name': 'V1730', 'model': 730, 'family_code': 11, 'form_factor': 2,
+#  'channels': 16, 'adc_bits': 14, 'serial_number': 1234, 'pcb_revision': 3,
+#  'board_reg_id': 0, 'dpp_type': 'DPP-PSD', 'dpp_code': 2,
+#  'ns_per_sample': 2, 'ns_per_timetag': 8,
+#  'roc_firmware': '4.25_...', 'amc_firmware': '136.44_...', 'license': '...',
+#  'channel_enable_mask': 0xFFFF, 'acquisition_control': 0x1, ...
+#  'sync_role': 'master', 'conn_type': 0, 'link_num': 0, 'node': 0, 'vme_base': 0}
+```
 
 ## Install the Python module (`import caendaq`)
 

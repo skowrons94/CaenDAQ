@@ -10,6 +10,7 @@
 //
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 
 #include "caendaq/IDigitizer.hpp"
@@ -25,8 +26,13 @@ public:
 
     bool open() override;
     bool configure() override;
+    std::uint32_t startMode() const override;
     bool start() override;
+    bool arm() override;
+    bool sendSWTrigger() override;
     bool read(const char** data, std::size_t* size) override;
+    bool writeRegister(std::uint32_t address, std::uint32_t value) override;
+    bool readRegister(std::uint32_t address, std::uint32_t* value) override;
     bool stop() override;
     void close() override;
 
@@ -46,6 +52,16 @@ private:
     BoardParams               params_;
     std::unique_ptr<CAENDgtz> dgtz_;
     BoardInfo                 info_;
+
+    // One CAEN handle, two callers: the reader thread and (during online
+    // tuning) whoever writes a register. The CAEN library gives no thread-safety
+    // guarantee for concurrent calls on the same handle, so read() and the
+    // register accessors serialise here.
+    //
+    // stop()/close() deliberately stay outside it: they are the recovery path
+    // for a board that has stopped answering, and must not be made to wait on a
+    // reader stuck inside a long ReadData.
+    mutable std::mutex        ioMutex_;
 
     char*         readoutBuffer_ = nullptr; // owned by CAEN lib (MallocReadoutBuffer)
     std::uint32_t bufferSize_    = 0;

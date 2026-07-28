@@ -19,12 +19,15 @@ MockDigitizer::MockDigitizer(BoardParams params, Options opt)
     info_.channels         = 16;
     info_.adcNBits         = 14;
     info_.serialNumber     = 4818;
-    info_.boardRegId       = 0;
-    info_.dppType          = DppType::PSD;
+    info_.boardRegId       = opt_.boardId & 0x1Fu;   // unique per board in the run
+    info_.dppType          = opt_.dpp;               // PHA or PSD, from the board's config
     info_.nsPerSample      = 2;
     info_.nsPerTimetag     = 8;
     info_.rocFirmware      = "mock-roc";
     info_.amcFirmware      = "mock-amc";
+    // Mirror the configured Start/Stop Mode into Acquisition Control (0x8100)
+    // so board_info() reports the same chain a real board would.
+    info_.acquisitionControl = opt_.startMode & 0x3u;
     info_.channelEnableMask = 0xFFFF;
     info_.connType         = params_.connType;
     info_.linkNum          = params_.linkNum;
@@ -52,6 +55,22 @@ bool MockDigitizer::configure() {
     return true;
 }
 
+bool MockDigitizer::arm() {
+    // There is no cable and no external start signal here, so an armed mock
+    // board simply begins producing straight away. The distinct entry point
+    // still exercises Daq's arm-everything-then-trigger sequencing, and the log
+    // line shows which boards a real system would have left waiting.
+    LOG_INFO("MockDigitizer[" << params_.name << "]: armed (start mode "
+             << startMode() << "; mock has no external start to wait for)");
+    return start();
+}
+
+bool MockDigitizer::sendSWTrigger() {
+    LOG_INFO("MockDigitizer[" << params_.name << "]: software trigger sent "
+             "(would start the chain on real hardware)");
+    return true;
+}
+
 bool MockDigitizer::start() {
     running_ = true;
     counter_ = 0;
@@ -76,11 +95,14 @@ bool MockDigitizer::read(const char** data, std::size_t* size) {
                         (opt_.ratePerSec ? opt_.ratePerSec : 1));
     nextEmit_ += period;
 
-    // Fabricate ONE valid V1730 DPP-PSD board aggregate so the whole chain
-    // (RUReader-readable file + online decoder) sees real events. When waveforms
-    // are enabled the events also carry a synthetic trace (Trace flag + samples),
+    // Fabricate ONE valid V1730 (x730 family) board aggregate so the whole chain
+    // (RUReader-readable file + online decoder) sees real events. The x730 event
+    // framing is identical for DPP-PHA and DPP-PSD (TS word + one data word);
+    // only the meaning of the data word and the decode path differ, so the same
+    // aggregate serves both — see the per-event word below. When waveforms are
+    // enabled the events also carry a synthetic trace (Trace flag + samples),
     // exactly as a real board configured for waveform recording would.
-    //   couple 0 -> channels 0/1 (via the CH bit), qshort/qlong ~ a soft peak.
+    //   couple 0 -> channels 0/1 (via the CH bit); energy | qshort/qlong ~ a soft peak.
     const bool          trace     = opt_.waveforms && opt_.traceSamples >= 2;
     const std::uint32_t nSamp     = trace ? (opt_.traceSamples & ~0xFu) : 0u; // multiple of 16
     const std::uint32_t nTraceW   = nSamp / 2;              // 2 samples / word
@@ -98,7 +120,7 @@ bool MockDigitizer::read(const char** data, std::size_t* size) {
     const std::uint32_t fail =
         (opt_.failEvery && (nextRand() % opt_.failEvery == 0u)) ? 1u : 0u; // board-FAIL (off by default)
     w[k++] = 0xA0000000u | (aggLen & 0x0FFFFFFFu);   // sync + length
-    w[k++] = (0u << 27) | (fail << 26) | 0x01u;      // board 0, [FAIL], channelMask = couple 0
+    w[k++] = ((info_.boardRegId & 0x1Fu) << 27) | (fail << 26) | 0x01u; // board id, [FAIL], channelMask = couple 0
     w[k++] = static_cast<std::uint32_t>(counter_ & 0x7FFFFF); // aggregate counter
     w[k++] = static_cast<std::uint32_t>(counter_);            // aggregate time tag
     w[k++] = coupleSize;                             // couple-aggregate size
@@ -127,17 +149,47 @@ bool MockDigitizer::read(const char** data, std::size_t* size) {
             }
         }
 
-        // qlong ~ soft peak near 6000 (sum of uniforms ≈ Gaussian); qshort ≈ qlong/2.
-        const std::uint32_t noise = (nextRand() % 800) + (nextRand() % 800) + (nextRand() % 800);
-        const std::uint32_t qlong  = (4800u + noise) & 0xFFFFu;
-        const std::uint32_t qshort = (qlong / 2) & 0x7FFFu;
         const std::uint32_t pileup = (nextRand() % 20u == 0u) ? 1u : 0u; // ~5% pile-up
-        w[k++] = qshort | (pileup << 15) | (qlong << 16);         // charge word (+PU bit)
+        if (info_.dppType == DppType::PHA) {
+            // PHA energy word: 15-bit energy peak (bits 0..14) + pile-up (bit 15).
+            // The PHA extras/flag field (bits 16..20, read as satu/lost) stays 0.
+            const std::uint32_t noise  = (nextRand() % 1600) + (nextRand() % 1600);
+            const std::uint32_t energy = (8000u + noise) & 0x7FFFu; // soft peak ~8000-11000
+            w[k++] = energy | (pileup << 15);                       // energy word (+PU bit)
+        } else {
+            // PSD charge word: qshort (bits 0..14) + pile-up (bit 15) + qlong (bits 16..31).
+            // qlong ~ soft peak near 6000 (sum of uniforms ≈ Gaussian); qshort ≈ qlong/2.
+            const std::uint32_t noise = (nextRand() % 800) + (nextRand() % 800) + (nextRand() % 800);
+            const std::uint32_t qlong  = (4800u + noise) & 0xFFFFu;
+            const std::uint32_t qshort = (qlong / 2) & 0x7FFFu;
+            w[k++] = qshort | (pileup << 15) | (qlong << 16);       // charge word (+PU bit)
+        }
     }
     ++counter_;
 
     *data = buffer_.data();
     *size = k * sizeof(std::uint32_t);
+    return true;
+}
+
+bool MockDigitizer::writeRegister(std::uint32_t address, std::uint32_t value) {
+    if (!open_) return false;
+    {
+        std::lock_guard<std::mutex> guard(registersMutex_);
+        registers_[address] = value;
+    }
+    LOG_INFO("MockDigitizer[" << params_.name << "]: wrote 0x" << std::hex << value
+             << " to register 0x" << address << std::dec);
+    return true;
+}
+
+bool MockDigitizer::readRegister(std::uint32_t address, std::uint32_t* value) {
+    if (!open_ || value == nullptr) return false;
+    std::lock_guard<std::mutex> guard(registersMutex_);
+    const auto it = registers_.find(address);
+    // Never written online: report zero rather than failing, so a caller can
+    // read any address back without special-casing the mock.
+    *value = (it == registers_.end()) ? 0u : it->second;
     return true;
 }
 

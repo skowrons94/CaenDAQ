@@ -7,6 +7,8 @@
 //
 #include <chrono>
 #include <cstdint>
+#include <map>
+#include <mutex>
 #include <utility>
 #include <vector>
 
@@ -23,6 +25,18 @@ public:
         bool          waveforms  = false;   // emit a synthetic trace per event
         std::uint32_t traceSamples = 128;   // samples per trace when enabled (mult. of 16)
         std::uint32_t failEvery   = 0;      // set the board-FAIL bit ~1/failEvery aggregates (0 = never)
+        // Firmware the mock emulates: PHA fills the energy spectrum, PSD fills
+        // qshort/qlong. Chosen from the board's dpp so the online decoder routes
+        // the same way it would for the real board. (x730 event framing is
+        // structurally identical for the two, only the decode path differs.)
+        DppType       dpp        = DppType::PSD;
+        // Board id stamped into every aggregate header (top 5 bits of word[1])
+        // and reported as boardRegId — must be unique per board so the unified
+        // file/decoder can tell the boards apart.
+        std::uint32_t boardId    = 0;
+        // Start/Stop Mode the mock pretends to be configured with, so the
+        // arm-then-trigger sequencing can be exercised without hardware.
+        std::uint32_t startMode  = kStartModeSW;
     };
 
     MockDigitizer(BoardParams params, Options opt);
@@ -30,8 +44,17 @@ public:
 
     bool open() override;
     bool configure() override;
+    std::uint32_t startMode() const override { return opt_.startMode; }
     bool start() override;
+    // The mock has no external start signal, so an armed board simply begins
+    // producing data when the software trigger arrives (see sendSWTrigger).
+    bool arm() override;
+    bool sendSWTrigger() override;
     bool read(const char** data, std::size_t* size) override;
+    // The mock keeps whatever is written to it, so online tuning can be driven
+    // end to end without hardware: a write is accepted and reads back.
+    bool writeRegister(std::uint32_t address, std::uint32_t value) override;
+    bool readRegister(std::uint32_t address, std::uint32_t* value) override;
     bool stop() override;
     void close() override;
 
@@ -45,6 +68,9 @@ private:
     BoardInfo    info_;
     bool         open_    = false;
     bool         running_ = false;
+
+    std::map<std::uint32_t, std::uint32_t> registers_;  // whatever online tuning wrote
+    mutable std::mutex registersMutex_;
 
     std::vector<char> buffer_;                 // reusable readout buffer
     std::uint32_t     lfsr_ = 0x1234567u;      // deterministic pseudo-random state

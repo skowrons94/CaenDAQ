@@ -1,15 +1,16 @@
 #pragma once
 //
-// BoardRunner — drives one board through a run and streams its raw buffers to
-// disk on a two-thread pipeline:
+// BoardRunner — drives ONE board through a run. It reads the board on a tight,
+// time-critical reader thread and fans each raw buffer out to two consumers:
 //
-//     [reader thread]  digitizer.read()  --RawBlock-->  BlockQueue
-//     [writer thread]  BlockQueue.pop()  -------------> RawFileWriter (.caendat)
+//     [reader thread]  digitizer.read()  --RawBlock--> shared write queue (Daq)
+//                                                   \-> DecodeStage (per board)
 //
-// The reader stays tight and time-critical (only read() + enqueue); all disk
-// I/O happens on the writer thread so a stalling filesystem can't back up the
-// board. Every thread body is wrapped so no exception can escape and crash the
-// process.
+// The file writing itself is NOT owned here: every board pushes to the SINGLE
+// shared BlockQueue owned by Daq, which a single writer thread drains into one
+// unified .caendat file (mirroring the XDAQ ReadoutUnit, which reads a vector
+// of boards into one file). Decoding stays per board (its own HistogramStore).
+// Every thread body is wrapped so no exception can escape and crash the process.
 //
 #include <atomic>
 #include <cstdint>
@@ -17,41 +18,77 @@
 #include <thread>
 
 #include "caendaq/BlockQueue.hpp"
+#include "caendaq/BoardInfo.hpp"
 #include "caendaq/DecodeStage.hpp"
 #include "caendaq/HistogramStore.hpp"
 #include "caendaq/IDigitizer.hpp"
-#include "caendaq/RawFileWriter.hpp"
 
 namespace caendaq {
 
 struct BoardRunnerConfig {
-    WriterConfig  writer;                 // output file settings for this board
-    std::size_t   queueCapacity = 4096;   // max in-flight raw blocks (writer path)
     int           reconnectBackoffMs = 500; // pause after a comm error before retry
-    bool          write  = true;           // write .caendat files (false = decode-only)
+    bool          write  = true;           // push this board's buffers to the file
     bool          decode = false;          // enable the parallel decode tap
     std::size_t   decodeQueueCapacity = 1024;
 };
 
 class BoardRunner {
 public:
-    BoardRunner(std::unique_ptr<IDigitizer> dgtz, BoardRunnerConfig cfg);
+    // writeQueue: the shared queue this board pushes raw buffers to (nullptr when
+    //   cfg.write is false / no file is being written).
+    // writerFailed: shared flag set by Daq's writer thread on I/O error, so this
+    //   board's reader stops pushing into a dead file (may be nullptr).
+    BoardRunner(std::unique_ptr<IDigitizer> dgtz, BoardRunnerConfig cfg,
+                BlockQueue* writeQueue, std::atomic<bool>* writerFailed);
     ~BoardRunner();
 
-    // Open + configure the board and open the output file. False on failure.
+    // Open + configure the board (and set up the decode tap). False on failure.
+    // Captures the board identity for the file header (see boardInfo()).
     bool prepare();
 
-    // Start acquisition and spawn the reader/writer threads.
+    // Is this board configured to wait for an external start signal? Read from
+    // its own Acquisition Control register; valid after prepare().
+    bool synchronised() const { return dgtz_->synchronised(); }
+    std::uint32_t startMode() const { return dgtz_->startMode(); }
+
+    // Start acquisition (software start) and spawn the reader thread.
+    // prepare() must have run.
     bool start();
 
-    // Stop acquisition, drain the queue, flush and close the file. Idempotent.
+    // Arm a synchronised board and spawn its reader thread. The board produces
+    // nothing until its external start arrives, but the reader is already
+    // running so not a single buffer is missed once it does.
+    bool arm();
+
+    // Fire the software trigger that starts a daisy chain (master only).
+    bool sendSWTrigger() { return dgtz_->sendSWTrigger(); }
+
+    // Online tuning: change a register on this board while it is being read out.
+    // Safe to call from another thread — the backend serialises it against the
+    // reader. Which registers may be touched mid-run is decided by the caller.
+    bool writeRegister(std::uint32_t address, std::uint32_t value) {
+        return dgtz_->writeRegister(address, value);
+    }
+    bool readRegister(std::uint32_t address, std::uint32_t* value) {
+        return dgtz_->readRegister(address, value);
+    }
+
+    // Stop acquisition, join the reader, stop the decode tap. Idempotent. Does
+    // NOT touch the shared file writer — Daq owns that.
     void stop();
+
+    // Board identity, valid after prepare(). Used to build the file header.
+    const BoardInfo& boardInfo() const { return boardInfo_; }
+
+    // Record the role this board ended up with in the chain (set by Daq::start()
+    // once the master is known). Reported through boardInfo() for the metadata.
+    void setSyncRole(SyncRole role) { boardInfo_.syncRole = role; }
 
     // Live counters (safe to read from any thread).
     std::uint64_t buffersRead()  const { return buffersRead_.load(); }
     std::uint64_t bytesRead()    const { return bytesRead_.load(); }
-    std::uint64_t bytesWritten() const { return writer_.bytesWritten(); }
-    std::uint64_t blocksDropped() const { return queue_.dropped(); }
+    std::uint64_t bytesWritten() const { return bytesWritten_.load(); }   // bytes accepted by the write queue
+    std::uint64_t blocksDropped() const { return blocksDropped_.load(); } // write-queue rejects (full)
     std::uint64_t commErrors()   const { return commErrors_.load(); }
     const std::string& name()    const { return dgtz_->name(); }
 
@@ -65,22 +102,22 @@ public:
 
 private:
     void readerLoop();
-    void writerLoop();
 
     std::unique_ptr<IDigitizer> dgtz_;
     BoardRunnerConfig           cfg_;
-    RawFileWriter               writer_;
-    BlockQueue                  queue_;
+    BlockQueue*                 writeQueue_   = nullptr; // shared, owned by Daq
+    std::atomic<bool>*          writerFailed_ = nullptr; // shared, owned by Daq
+    BoardInfo                   boardInfo_;
     HistogramStore              histograms_;
     std::unique_ptr<DecodeStage> decodeStage_;
 
     std::thread        readerThread_;
-    std::thread        writerThread_;
     std::atomic<bool>  running_{false};
-    std::atomic<bool>  writerFailed_{false};
 
     std::atomic<std::uint64_t> buffersRead_{0};
     std::atomic<std::uint64_t> bytesRead_{0};
+    std::atomic<std::uint64_t> bytesWritten_{0};
+    std::atomic<std::uint64_t> blocksDropped_{0};
     std::atomic<std::uint64_t> commErrors_{0};
 };
 

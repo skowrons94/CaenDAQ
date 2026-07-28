@@ -1,29 +1,31 @@
 #pragma once
 //
-// RawFileWriter — appends raw board buffers to .caendat files, writes the XDAQ
-// data-file header on the first file, a trailer at close, and rolls over to a
-// new cycle file once a configurable size limit is exceeded.
+// RawFileWriter — appends the raw buffers of ALL boards to ONE unified .caendat
+// stream (each CAEN aggregate self-identifies its board), writes the XDAQ
+// data-file header — describing every board — on the first file, and rolls over
+// to a new part file once a configurable size limit is exceeded. This mirrors
+// the XDAQ ReadoutUnit, which reads a vector of digitizers into a single file.
 //
-// File naming:  <dir>/<prefix>_<board>_run<run>_<cyc>.caendat
-//   e.g. data/run42/ru_V1730A_run42_0000.caendat
-// The "ru" prefix + ".caendat" suffix keep it glob-compatible with the existing
-// convert.sh (which globs run<N>/ru*.caendat).
+// File naming:  <dir>/run_<run>_<part>.caendat
+//   e.g. data/run42/run_42_0000.caendat
+// Still ".caendat" so RUReader / convert globs (run*.caendat) match. Before
+// creating any part file, if the name already exists a "_1", "_2", ... suffix
+// is appended so an existing file is never overwritten.
 //
 #include <cstdint>
 #include <fstream>
 #include <string>
+#include <vector>
 
-#include "caendaq/BoardInfo.hpp"
+#include "caendaq/DataFileHeader.hpp"   // XdaqBoardDef (pulls in BoardInfo)
 
 namespace caendaq {
 
 struct WriterConfig {
     std::string   directory   = ".";     // output directory (created if missing)
-    std::string   prefix      = "ru";     // filename prefix (keep "ru" for RUReader)
-    std::string   board       = "board";  // board name, embedded in filename
     std::uint32_t runNumber   = 0;
     std::uint64_t maxFileBytes = 0;        // 0 = never split (single file per run)
-    bool          writeHeader  = true;     // write the self-describing header/trailer
+    bool          writeHeader  = true;     // write the self-describing header
 };
 
 class RawFileWriter {
@@ -34,9 +36,10 @@ public:
     RawFileWriter(const RawFileWriter&) = delete;
     RawFileWriter& operator=(const RawFileWriter&) = delete;
 
-    // Board info to embed in the file header. Call after the board is configured
-    // and before open(). Optional (mock/unknown boards may leave it default).
-    void setBoardInfo(const BoardInfo& info) { info_ = info; }
+    // Board-definition words to embed in the file header, one per board in add
+    // order (board index i is boardDefs[i]). Call before open(). Optional (an
+    // empty list writes a header with nbBoards = 0).
+    void setBoards(std::vector<XdaqBoardDef> boards) { boardDefs_ = std::move(boards); }
 
     // Open the first file and (optionally) write the run header. Returns false
     // on I/O error (never throws).
@@ -55,9 +58,12 @@ public:
 private:
     bool openCycle(bool firstFile);
     std::string makePath(int cycle) const;
+    // Return `intended` if free, else the same name with "_1"/"_2"/... inserted
+    // before ".caendat" — so an existing file is never truncated.
+    std::string uniquePath(const std::string& intended) const;
 
     WriterConfig  cfg_;
-    BoardInfo     info_;
+    std::vector<XdaqBoardDef> boardDefs_;   // header board table (add order)
     std::ofstream file_;
     int           cycle_        = 0;
     std::uint64_t fileBytes_    = 0;   // bytes in the current cycle file
