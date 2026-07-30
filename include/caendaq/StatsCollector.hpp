@@ -29,6 +29,7 @@ struct ChannelSample {
 };
 struct BoardSample {
     std::string   name;
+    std::uint16_t boardRegId   = 0;   // VME board id (0xEF08) — the 'bo_' in metric paths
     std::uint64_t bytesWritten = 0;
     std::uint64_t boardFail    = 0;   // cumulative board-FAIL aggregates this run
     std::vector<ChannelSample> channels;
@@ -43,6 +44,7 @@ struct ChannelRate {
 };
 struct BoardRate {
     std::string name;
+    std::uint16_t boardRegId = 0; // VME board id (0xEF08) — the 'bo_' in metric paths
     double writeRate = 0;         // bytes / second to file
     std::uint64_t boardFail = 0;  // cumulative board-FAIL aggregates this run
     std::vector<ChannelRate> channels;
@@ -54,6 +56,10 @@ public:
         int         intervalMs   = 1000;
         std::string graphiteHost;              // empty = no Graphite push
         int         graphitePort = 2003;
+        // Root of every metric path this collector writes. One experiment per
+        // subtree — 'ancillary.rates.12c12c' and 'ancillary.rates.BGO' keep two
+        // campaigns apart in the same Graphite. Boards appear below it as
+        // 'bo_<VME board id>', so the prefix is per-experiment, never per-board.
         std::string prefix       = "ancillary.rates";
     };
 
@@ -64,7 +70,8 @@ public:
     void stop();
 
     // Change the Graphite/Carbon target while running (empty host disables it).
-    void setGraphite(const std::string& host, int port);
+    // An empty prefix leaves the current one alone.
+    void setGraphite(const std::string& host, int port, const std::string& prefix = "");
 
     std::vector<BoardRate> snapshot() const;
 

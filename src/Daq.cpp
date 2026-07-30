@@ -182,6 +182,7 @@ bool Daq::start() {
     sopt.intervalMs   = opt_.statsIntervalMs;
     sopt.graphiteHost = opt_.graphiteHost;
     sopt.graphitePort = opt_.graphitePort;
+    if (!opt_.graphitePrefix.empty()) sopt.prefix = opt_.graphitePrefix;
     stats_ = std::make_unique<StatsCollector>([this] { return sampleStats(); }, sopt);
     stats_->start();
 
@@ -242,6 +243,7 @@ std::vector<BoardSample> Daq::sampleStats() const {
     for (const auto& r : runners_) {
         BoardSample bs;
         bs.name         = r->name();
+        bs.boardRegId   = static_cast<std::uint16_t>(r->boardInfo().boardRegId);
         bs.bytesWritten = r->bytesWritten();
         bs.boardFail    = r->boardFailures();
         HistogramStore& h = r->histograms();
@@ -261,10 +263,11 @@ std::vector<BoardRate> Daq::stats() const {
     return stats_ ? stats_->snapshot() : std::vector<BoardRate>{};
 }
 
-void Daq::setGraphite(const std::string& host, int port) {
+void Daq::setGraphite(const std::string& host, int port, const std::string& prefix) {
     opt_.graphiteHost = host;
     opt_.graphitePort = port;
-    if (stats_) stats_->setGraphite(host, port);
+    if (!prefix.empty()) opt_.graphitePrefix = prefix;
+    if (stats_) stats_->setGraphite(host, port, prefix);
 }
 
 bool Daq::writeRegister(int board, std::uint32_t address, std::uint32_t value) {
