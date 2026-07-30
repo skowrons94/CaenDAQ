@@ -23,6 +23,15 @@ public:
         bool          waveforms  = false;   // emit a synthetic trace per event
         std::uint32_t traceSamples = 128;   // samples per trace when enabled (mult. of 16)
         std::uint32_t failEvery   = 0;      // set the board-FAIL bit ~1/failEvery aggregates (0 = never)
+        // Firmware the mock emulates: PHA fills the energy spectrum, PSD fills
+        // qshort/qlong. Chosen from the board's dpp so the online decoder routes
+        // the same way it would for the real board. (x730 event framing is
+        // structurally identical for the two, only the decode path differs.)
+        DppType       dpp        = DppType::PSD;
+        // Board id stamped into every aggregate header (top 5 bits of word[1])
+        // and reported as boardRegId — must be unique per board so the unified
+        // file/decoder can tell the boards apart.
+        std::uint32_t boardId    = 0;
     };
 
     MockDigitizer(BoardParams params, Options opt);

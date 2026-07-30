@@ -135,7 +135,7 @@ bool CaenDigitizer::applyConfig() {
         dpp == CAEN_DGTZ_DPPFirmware_PSD ||
         dpp == CAEN_DGTZ_DPPFirmware_CI) {
         errcode_ = 0;
-        dgtz_->SetDPPEventAggregation(0, 0);
+        //dgtz_->SetDPPEventAggregation(0, 0);
         if (errcode_ != 0) {
             LOG_ERROR(params_.name << ": SetDPPEventAggregation failed");
             return false;

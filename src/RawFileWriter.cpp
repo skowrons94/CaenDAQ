@@ -17,11 +17,24 @@ RawFileWriter::~RawFileWriter() { close(); }
 
 std::string RawFileWriter::makePath(int cycle) const {
     std::ostringstream oss;
-    oss << cfg_.prefix << "_" << cfg_.board
-        << "_run" << cfg_.runNumber
+    oss << "run_" << cfg_.runNumber
         << "_" << std::setw(4) << std::setfill('0') << cycle
         << ".caendat";
     return (fs::path(cfg_.directory) / oss.str()).string();
+}
+
+std::string RawFileWriter::uniquePath(const std::string& intended) const {
+    std::error_code ec;
+    if (!fs::exists(intended, ec)) return intended;
+    const fs::path p(intended);
+    const fs::path dir  = p.parent_path();
+    const std::string stem = p.stem().string();       // run_42_0000
+    const std::string ext  = p.extension().string();  // .caendat
+    for (int n = 1; n < 100000; ++n) {
+        const fs::path cand = dir / (stem + "_" + std::to_string(n) + ext);
+        if (!fs::exists(cand, ec)) return cand.string();
+    }
+    return intended; // pathological: fall back (will truncate) rather than spin
 }
 
 bool RawFileWriter::open() {
@@ -41,7 +54,8 @@ bool RawFileWriter::openCycle(bool firstFile) {
         return false;
     }
 
-    const std::string path = makePath(cycle_);
+    // Never overwrite an existing part file — append _1/_2/... if one is there.
+    const std::string path = uniquePath(makePath(cycle_));
     file_.close();
     file_.clear();
     file_.open(path, std::ios::out | std::ios::binary | std::ios::trunc);
@@ -53,11 +67,12 @@ bool RawFileWriter::openCycle(bool firstFile) {
     closed_ = false;
     LOG_INFO("RawFileWriter: opened " << path);
 
-    // The XDAQ header is written only to the first file of the run; split files
-    // start directly with a board aggregate (RUReader handles both).
+    // The XDAQ header (describing every board) is written only to the first file
+    // of the run; split files start directly with a board aggregate (RUReader
+    // handles both).
     if (firstFile && cfg_.writeHeader) {
         const std::vector<std::uint32_t> header =
-            buildXdaqHeader({boardDefFrom(info_)}, nowEpoch32());
+            buildXdaqHeader(boardDefs_, nowEpoch32());
         const std::size_t nbytes = header.size() * sizeof(std::uint32_t);
         file_.write(reinterpret_cast<const char*>(header.data()),
                     static_cast<std::streamsize>(nbytes));

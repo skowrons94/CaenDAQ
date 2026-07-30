@@ -1,21 +1,26 @@
 # CaenDAQ
 
-A small, portable (Linux + Windows) C++17 DAQ for CAEN digitizers, intended to
-replace the XDAQ + Docker + LunaSpy + socket chain used by WebDAQ. No XDAQ, no
-Docker, no I2O, no ROOT on the C++ side.
+A small, portable, in-process C++17 DAQ for CAEN digitizers, used by WebDAQ. It
+reads the boards, writes `.caendat` files and decodes events to online spectra —
+no I2O, no sockets, no ROOT on the C++ side.
 
 ## Design
 
 ```
-  CAEN board ─► IDigitizer      reader thread ─┬─► BlockQueue ─► writer thread
-                (CaenDigitizer/  (tight read(), │   (must not      (RawFileWriter:
-                 MockDigitizer)   never blocks)  │    drop)          .caendat + XDAQ header
-                                                 │                   + size splitting)
-                                                 └─► DecodeStage (best-effort tap, own thread)
-                                                     AggregateDecoder ─► HistogramStore
-                                                     (PHA/PSD/waveform)  (spectra + waveforms,
-                                                                          thread-safe snapshots)
+  board 0 ─► IDigitizer  reader ─┐
+  board 1 ─► IDigitizer  reader ─┼─► ONE shared BlockQueue ─► ONE writer thread
+             (CaenDigitizer/     │   (must not drop)           (RawFileWriter: one
+              MockDigitizer)     │                              unified .caendat, XDAQ
+                                 │                              multi-board header, splitting)
+                                 └─► DecodeStage (per board, best-effort tap, own thread)
+                                     AggregateDecoder ─► HistogramStore
+                                     (PHA/PSD/waveform)  (spectra + waveforms,
+                                                          thread-safe snapshots)
 ```
+
+All boards stream into ONE unified `.caendat` (each CAEN aggregate self-identifies
+its board), exactly like the XDAQ ReadoutUnit — not one file per board. Decoding
+stays per board (its own HistogramStore).
 
 * **`IDigitizer`** — hardware abstraction. Lifecycle mirrors the proven CAEN
   sequence: `open → configure → start → read* → stop → close`. No method throws;
@@ -28,14 +33,15 @@ Docker, no I2O, no ROOT on the C++ side.
 * **`BlockQueue`** — bounded, thread-safe queue decoupling the time-critical
   reader from disk I/O. Full-queue blocks are dropped and **counted**, never
   silently lost, so a slow disk can't overflow memory or stall the board.
-* **`RawFileWriter`** — appends the raw board buffer to
-  `<dir>/ru_<board>_run<N>_<cyc>.caendat`, writes the XDAQ header on the first
-  file, and rolls to a new cycle file past a configurable size limit.
+* **`RawFileWriter`** — appends every board's raw buffers to one unified
+  `<dir>/run_<N>_<part>.caendat`, writes the XDAQ multi-board header on the first
+  file, and rolls to a new part file past a configurable size limit. Never
+  overwrites an existing file (appends `_1`/`_2`/… if the name is taken).
 * **`DecodeStage` / `AggregateDecoder` / `HistogramStore`** — the optional
   parallel decode tap (see below). Best-effort, so it never slows readout.
-* **`BoardRunner`** — wires one board's reader + writer (+ optional decode)
-  together. Every thread body is wrapped so no exception can escape and crash the
-  process.
+* **`BoardRunner`** — wires one board's reader (+ optional decode) and pushes its
+  buffers to the shared writer queue owned by `Daq`. Every thread body is wrapped
+  so no exception can escape and crash the process.
 
 ### On-disk format (`.caendat`)
 

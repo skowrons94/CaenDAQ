@@ -1,18 +1,24 @@
 #pragma once
 //
 // Daq — top-level orchestrator over one or more boards. Each board runs its own
-// reader/writer(/decode) pipeline (BoardRunner) and writes its own .caendat.
+// reader(/decode) pipeline (BoardRunner), but ALL boards share ONE file writer:
+// their raw buffers are pushed to a single queue drained by one writer thread
+// into one unified .caendat (like the XDAQ ReadoutUnit's multi-board file).
 // This is the object the Python (pybind11) layer wraps as an instance.
 //
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
+#include "caendaq/BlockQueue.hpp"
 #include "caendaq/BoardRunner.hpp"
 #include "caendaq/HistogramStore.hpp"
 #include "caendaq/IDigitizer.hpp"
 #include "caendaq/MockDigitizer.hpp"
+#include "caendaq/RawFileWriter.hpp"
 #include "caendaq/StatsCollector.hpp"
 
 namespace caendaq {
@@ -21,10 +27,11 @@ struct BoardSpec {
     BoardParams   params;                 // name, connType, link, node, vmeBase, configPath
     bool          mock       = false;      // use MockDigitizer instead of a real board
     bool          decode     = false;      // enable the parallel decode tap
-    bool          write      = true;       // write .caendat files (false = decode-only)
+    bool          write      = true;       // include this board in the .caendat file
     std::uint32_t mockRate   = 200;        // mock buffers/s (mock only)
     bool          mockWaveforms = false;   // mock: emit a synthetic trace per event
     std::uint32_t mockFailEvery = 0;       // mock: inject a board-FAIL ~1/N aggregates (0 = never)
+    DppType       mockDpp    = DppType::PSD; // mock: firmware to emulate (PHA=energy, PSD=q). From the board's dpp.
 };
 
 class Daq {
@@ -83,8 +90,10 @@ public:
     void setGraphite(const std::string& host, int port);
 
 private:
-    std::unique_ptr<IDigitizer> makeDigitizer(const BoardSpec& spec) const;
+    std::unique_ptr<IDigitizer> makeDigitizer(const BoardSpec& spec, std::size_t index) const;
     std::vector<BoardSample>    sampleStats() const;
+    void writerLoop();          // single thread: drains writeQueue_ -> writer_
+    void teardownWriter();      // close queue, join writer thread, close file
 
     std::string   outputDir_;
     std::uint32_t run_;
@@ -93,6 +102,14 @@ private:
     std::vector<std::unique_ptr<BoardRunner>> runners_;
     std::vector<std::string>                  names_;
     std::unique_ptr<StatsCollector>           stats_;
+
+    // Unified file writer shared by every board.
+    BlockQueue                     writeQueue_{8192}; // shared raw-buffer queue
+    std::unique_ptr<RawFileWriter> writer_;
+    std::thread                    writerThread_;
+    std::atomic<bool>              writerFailed_{false};
+    bool                           anyWrite_ = false; // any board contributes to the file
+
     bool prepared_ = false;
     bool running_  = false;
 };

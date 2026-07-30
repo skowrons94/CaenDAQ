@@ -74,7 +74,7 @@ PYBIND11_MODULE(caendaq, m) {
              [](Daq& d, const std::string& name, int conn_type, int link, int node,
                 std::uint32_t base, const std::string& config, bool mock, bool decode,
                 bool write, std::uint32_t mock_rate, bool mock_waveforms,
-                std::uint32_t mock_fail_every) {
+                std::uint32_t mock_fail_every, const std::string& mock_dpp) {
                  BoardSpec s;
                  s.params.name       = name;
                  s.params.connType   = conn_type;
@@ -88,15 +88,20 @@ PYBIND11_MODULE(caendaq, m) {
                  s.mockRate = mock_rate;
                  s.mockWaveforms = mock_waveforms;
                  s.mockFailEvery = mock_fail_every;
+                 // Mock firmware to emulate (PHA fills energy, PSD fills q).
+                 // Accept the WebDAQ "DPP-PHA"/"DPP-PSD" spelling and bare names.
+                 s.mockDpp = (mock_dpp == "DPP-PHA" || mock_dpp == "PHA" || mock_dpp == "pha")
+                                 ? DppType::PHA : DppType::PSD;
                  return d.addBoard(s);
              },
              py::arg("name"), py::arg("conn_type") = 0, py::arg("link") = 0,
              py::arg("node") = 0, py::arg("base") = 0, py::arg("config") = "",
              py::arg("mock") = false, py::arg("decode") = true, py::arg("write") = true,
              py::arg("mock_rate") = 200, py::arg("mock_waveforms") = false,
-             py::arg("mock_fail_every") = 0,
+             py::arg("mock_fail_every") = 0, py::arg("mock_dpp") = "DPP-PSD",
              "Add a board (conn_type: 0=USB, 1=Optical, 5=A4818; write=False for "
-             "decode-only). Returns its index.")
+             "decode-only; mock_dpp 'DPP-PHA'/'DPP-PSD' picks the mock firmware). "
+             "Returns its index.")
 
         // Lifecycle — release the GIL, these block on I/O / thread joins.
         .def("prepare", &Daq::prepare, py::call_guard<py::gil_scoped_release>())
