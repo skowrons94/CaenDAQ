@@ -1,9 +1,12 @@
 #include "caendaq/CaenDigitizer.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <map>
+#include <utility>
 
 #include <json/json.h>
 
@@ -46,9 +49,34 @@ DppType mapDpp(CAEN_DGTZ_DPPFirmware_t fw) {
         default:                        return DppType::Std; // NotDPPFirmware = standard waveform
     }
 }
+
+// The mutex that serialises one physical link, created on first use and shared
+// by every board behind it.
+//
+// The key is (connection type, link number) — the bridge itself. Deliberately
+// NOT the node or the VME base address: those select a board BEHIND the link,
+// and three V1724s at different VME addresses reached through one V1718 all
+// share the same USB cable. Keying on them would hand each board its own mutex
+// and serialise nothing, which is the bug this exists to close.
+std::shared_ptr<std::timed_mutex> linkMutex(int connType, int linkNum) {
+    static std::mutex registryMtx;
+    static std::map<std::pair<int,int>, std::shared_ptr<std::timed_mutex>> registry;
+
+    std::lock_guard<std::mutex> guard(registryMtx);
+    auto& slot = registry[{connType, linkNum}];
+    if (!slot) slot = std::make_shared<std::timed_mutex>();
+    return slot;
+}
+
+// How long stop()/close() wait for the link before going ahead without it. Long
+// enough for a readout cycle to finish, short enough that a board which has
+// stopped answering cannot wedge the run's teardown.
+constexpr auto kLinkTeardownWait = std::chrono::seconds(2);
 } // namespace
 
-CaenDigitizer::CaenDigitizer(BoardParams params) : params_(std::move(params)) {
+CaenDigitizer::CaenDigitizer(BoardParams params)
+    : params_(std::move(params)),
+      ioMutex_(linkMutex(params_.connType, params_.linkNum)) {
     info_.connType = params_.connType;
     info_.linkNum  = params_.linkNum;
     info_.node     = params_.node;
@@ -293,7 +321,7 @@ bool CaenDigitizer::read(const char** data, std::size_t* size) {
     // Held for the whole cycle so an online register write cannot land in the
     // middle of a ReadData on the same handle. Uncontended cost is negligible
     // next to the readout itself.
-    std::lock_guard<std::mutex> guard(ioMutex_);
+    std::lock_guard<std::timed_mutex> guard(*ioMutex_);
 
     if (!connected()) {
         if (!reconnect()) return false; // still down: signal runner to back off
@@ -316,7 +344,7 @@ bool CaenDigitizer::read(const char** data, std::size_t* size) {
 bool CaenDigitizer::writeRegister(std::uint32_t address, std::uint32_t value) {
     if (!dgtz_) return false;
 
-    std::lock_guard<std::mutex> guard(ioMutex_);
+    std::lock_guard<std::timed_mutex> guard(*ioMutex_);
     if (!connected()) {
         LOG_WARN(params_.name << ": register write to 0x" << std::hex << address
                  << std::dec << " skipped — board not connected");
@@ -339,7 +367,7 @@ bool CaenDigitizer::writeRegister(std::uint32_t address, std::uint32_t value) {
 bool CaenDigitizer::readRegister(std::uint32_t address, std::uint32_t* value) {
     if (!dgtz_ || value == nullptr) return false;
 
-    std::lock_guard<std::mutex> guard(ioMutex_);
+    std::lock_guard<std::timed_mutex> guard(*ioMutex_);
     if (!connected()) return false;
 
     errcode_ = 0;
@@ -352,8 +380,24 @@ bool CaenDigitizer::readRegister(std::uint32_t address, std::uint32_t* value) {
     return true;
 }
 
+// Take the link for teardown, or give up on it. A board is stopped while its
+// SIBLINGS on the same bridge are still reading, so the stop cycle has to be
+// serialised against them like any other access. It must not be able to block
+// for ever, though: this is also the path out of a board that has stopped
+// answering. Waiting a bounded time covers the ordinary stop and still lets a
+// wedged one through.
+std::unique_lock<std::timed_mutex> CaenDigitizer::acquireLinkForTeardown(const char* what) {
+    std::unique_lock<std::timed_mutex> lock(*ioMutex_, std::defer_lock);
+    if (!lock.try_lock_for(kLinkTeardownWait)) {
+        LOG_WARN(params_.name << ": " << what << " going ahead without the link — "
+                 "a board on this bridge did not release it in time");
+    }
+    return lock;
+}
+
 bool CaenDigitizer::stop() {
     if (!dgtz_) return false;
+    auto lock = acquireLinkForTeardown("stop");
     running_ = false;
     errcode_ = 0;
     dgtz_->SWStopAcquisition();
@@ -366,7 +410,8 @@ bool CaenDigitizer::stop() {
 
 void CaenDigitizer::close() {
     if (!dgtz_) return;
-    if (running_) stop();
+    if (running_) stop();   // takes and releases the link itself
+    auto lock = acquireLinkForTeardown("close");
     if (readoutBuffer_) {
         dgtz_->FreeReadoutBuffer(&readoutBuffer_);
         readoutBuffer_ = nullptr;

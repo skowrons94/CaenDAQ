@@ -27,6 +27,13 @@ namespace caendaq {
 
 struct BoardRunnerConfig {
     int           reconnectBackoffMs = 500; // pause after a comm error before retry
+    // Pause after a read that returned nothing. Not a throughput knob: the
+    // boards behind one bridge take turns on a single link mutex, and a reader
+    // that loops straight back into the next MBLT holds that link almost
+    // continuously while its board has no data to give — starving the boards
+    // that do. Standing aside for a moment when there was nothing to read is
+    // what keeps the turn-taking fair. A board with data never gets here.
+    int           idlePollMs = 1;
     bool          write  = true;           // push this board's buffers to the file
     bool          decode = false;          // enable the parallel decode tap
     std::size_t   decodeQueueCapacity = 1024;

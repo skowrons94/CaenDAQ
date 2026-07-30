@@ -100,7 +100,14 @@ void BoardRunner::readerLoop() {
                     std::chrono::milliseconds(cfg_.reconnectBackoffMs));
                 continue;
             }
-            if (size == 0) continue; // no data available right now
+            if (size == 0) {
+                // Nothing pending. Let the other boards on this link have it —
+                // see BoardRunnerConfig::idlePollMs.
+                if (cfg_.idlePollMs > 0)
+                    std::this_thread::sleep_for(
+                        std::chrono::milliseconds(cfg_.idlePollMs));
+                continue;
+            }
 
             buffersRead_.fetch_add(1, std::memory_order_relaxed);
             bytesRead_.fetch_add(size, std::memory_order_relaxed);
