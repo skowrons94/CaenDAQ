@@ -65,6 +65,22 @@ if(_caen_wanted)
     endforeach()
     set(_caen_paths /usr /usr/local /opt/CAEN /opt/caen)
 
+    # An explicit root wins outright. This needs NO_DEFAULT_PATH: a plain HINTS
+    # entry is searched AFTER CMAKE_PREFIX_PATH, so inside an activated conda
+    # env the env prefix would be preferred over the /usr the caller asked for.
+    if(_caen_hints)
+        find_path(CAEN_DGTZ_INCLUDE_DIR
+            NAMES CAENDigitizer.h
+            HINTS ${_caen_hints}
+            PATH_SUFFIXES include include/CAEN
+            NO_DEFAULT_PATH)
+        find_library(CAEN_DGTZ_LIBRARY
+            NAMES CAENDigitizer
+            HINTS ${_caen_hints}
+            PATH_SUFFIXES lib lib64 lib/x86_64-linux-gnu
+            NO_DEFAULT_PATH)
+    endif()
+
     find_path(CAEN_DGTZ_INCLUDE_DIR
         NAMES CAENDigitizer.h
         HINTS ${_caen_hints}
