@@ -250,6 +250,32 @@ pip install . --config-settings=cmake.define.CAENDAQ_WITH_CAEN=ON
 
 Verify (in the same env): `python -c "import caendaq; print(caendaq.__file__)"`.
 
+#### "libCAENDigitizer was not found" — but the headers *are* in `/usr/include`
+
+This is the conda case. When a conda env has the compiler toolchain installed,
+its activation scripts export `CONDA_BUILD_SYSROOT` and a `CMAKE_ARGS` carrying
+`-DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY`. CMake then resolves every
+`find_path` *inside the env prefix*, so a perfectly good
+`/usr/include/CAENDigitizer.h` is invisible. The build now retries the search
+with that rerooting bypassed, and the error message prints `CMAKE_SYSROOT` /
+`CMAKE_FIND_ROOT_PATH` so you can see it happening.
+
+If it still misses, point the build at the installation explicitly:
+
+```bash
+pip install . \
+  --config-settings=cmake.define.CAENDAQ_WITH_CAEN=ON \
+  --config-settings=cmake.define.CAEN_DGTZ_ROOT=/usr
+```
+
+`CAEN_DGTZ_ROOT` (or the `$CAEN_DGTZ_ROOT` env var) is searched first, expecting
+`include/` and `lib/` below it. `CAEN_DGTZ_INCLUDE_DIR` / `CAEN_DGTZ_LIBRARY`
+still work if you need to name the two paths individually.
+
+> A failed lookup is **cached**. After installing the CAEN libraries, delete
+> `build/` (or the pip build dir) — otherwise CMake reuses the old `-NOTFOUND`
+> and reports the same error forever.
+
 ### B. CMake + manual install
 
 ```bash
