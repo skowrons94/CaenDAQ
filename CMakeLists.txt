@@ -95,6 +95,24 @@ if(_caen_wanted)
             NO_CMAKE_FIND_ROOT_PATH)
     endif()
 
+    # Locating the file on disk is NOT the same as the compiler being able to
+    # include it: a sysroot, a pruned -I, or a header needing something else can
+    # all break it. Compile a one-liner with the exact flag the build will use,
+    # so this fails here with a readable message instead of deep inside
+    # class_caen_dgtz.cc.
+    if(CAEN_DGTZ_INCLUDE_DIR)
+        include(CheckCXXSourceCompiles)
+        if(MSVC)
+            set(CMAKE_REQUIRED_FLAGS "/I\"${CAEN_DGTZ_INCLUDE_DIR}\"")
+        else()
+            set(CMAKE_REQUIRED_FLAGS "-I${CAEN_DGTZ_INCLUDE_DIR}")
+        endif()
+        check_cxx_source_compiles(
+            "#include \"CAENDigitizer.h\"\nint main() { return 0; }"
+            CAENDAQ_CAEN_HEADER_USABLE)
+        unset(CMAKE_REQUIRED_FLAGS)
+    endif()
+
     # The vendored driver parses its JSON register dumps with jsoncpp, so a CAEN
     # backend without jsoncpp cannot be built — treat it as part of the probe.
     find_package(jsoncpp QUIET)
@@ -120,6 +138,11 @@ if(_caen_wanted)
     set(_caen_missing "")
     if(NOT CAEN_DGTZ_INCLUDE_DIR)
         list(APPEND _caen_missing "CAENDigitizer.h")
+    elseif(NOT CAENDAQ_CAEN_HEADER_USABLE)
+        # Found, but the compiler could not actually include it.
+        list(APPEND _caen_missing
+             "CAENDigitizer.h is present in ${CAEN_DGTZ_INCLUDE_DIR} but the "
+             "compiler cannot include it (sysroot? see CMakeError.log)")
     endif()
     if(NOT CAEN_DGTZ_LIBRARY)
         list(APPEND _caen_missing "libCAENDigitizer")
