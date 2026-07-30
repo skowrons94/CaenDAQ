@@ -8,9 +8,19 @@ namespace {
 constexpr std::uint32_t kAggHeaderWords = 4;  // board-aggregate header size, in words
 constexpr std::uint32_t kMaxChannels    = 16;
 
-// Flag bits, matching RUReader.
-constexpr std::uint32_t kPhaSatuBit = 0x01; // PHA extras field: input saturation
-constexpr std::uint32_t kPhaLostBit = 0x20; // PHA extras field: lost event
+// Flag bits of the PHA "Extras" field of the energy word, matching RUReader.
+// Bit positions per UM6769 rev.2, "Channel Aggregate Data Format for 724, 781
+// and 782 series". Saturation used to be read from bit[0], which is DEAD_TIME:
+// the V1724s here never raise it, so satuRate was flat zero while real
+// saturated events (bit[4]) went unreported.
+constexpr std::uint32_t kPhaDeadTimeBit  = 0x01; // bit[0] dead time before this event
+constexpr std::uint32_t kPhaSatuBit      = 0x10; // bit[4] input saturation
+constexpr std::uint32_t kPhaDoubleSatBit = 0x80; // bit[7] input stage AND trapezoid saturated
+// bit[5] is a scaler, not a per-event flag: the board raises it once every N
+// lost triggers, N = 1024/128/8192 per 0x1nA0[17:16]. lostRate therefore counts
+// groups of N, not individual lost events — scale it before reading it as a rate.
+constexpr std::uint32_t kPhaLostBit = 0x20; // bit[5] lost-trigger tag
+
 constexpr std::uint32_t kPsdLostBit = 0x00001000; // PSD extra word (mode 1)
 constexpr std::uint32_t kPsdOverBit = 0x00004000; // PSD extra word (mode 1): saturation
 
@@ -132,7 +142,7 @@ void AggregateDecoder::decodePHA(const std::uint32_t* buf, std::uint32_t board,
             e.channel   = static_cast<std::uint16_t>(channel);
             e.energy    = static_cast<std::uint16_t>(energyWord & 0x7FFF);
             e.pileup    = (energyWord >> 15) & 0x1;
-            e.satu      = (flags & kPhaSatuBit) != 0;
+            e.satu      = (flags & (kPhaSatuBit | kPhaDoubleSatBit)) != 0;
             e.lost      = (flags & kPhaLostBit) != 0;
             e.timestamp = extendedBits ? ((static_cast<std::uint64_t>(extendedTS) << layout.tsBits) | rawTS)
                                        : rawTS;
