@@ -118,10 +118,12 @@ if(_caen_wanted)
     # class_caen_dgtz.cc.
     if(CAEN_DGTZ_INCLUDE_DIR)
         include(CheckCXXSourceCompiles)
+        # Exactly the flag the build will use — a probe with different flags
+        # can succeed while the real compile fails.
         if(MSVC)
             set(CMAKE_REQUIRED_FLAGS "/I\"${CAEN_DGTZ_INCLUDE_DIR}\"")
         else()
-            set(CMAKE_REQUIRED_FLAGS "-I${CAEN_DGTZ_INCLUDE_DIR}")
+            set(CMAKE_REQUIRED_FLAGS "-idirafter${CAEN_DGTZ_INCLUDE_DIR}")
         endif()
         check_cxx_source_compiles(
             "#include \"CAENDigitizer.h\"\nint main() { return 0; }"
@@ -257,23 +259,36 @@ if(CAENDAQ_CAEN_ENABLED)
     target_include_directories(caendaq
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/vendor/caen)
 
-    # CMake DROPS standard system directories from the -I flags it generates,
-    # /usr/include above all — it does that for GNU-like compilers whether or
-    # not the directory appears in CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES, so
-    # testing that list is not enough. The pruning is normally harmless because
-    # the compiler searches /usr/include by itself. A conda toolchain does not:
-    # x86_64-conda-linux-gnu-c++ builds against its own sysroot, so a header
-    # CMake happily reported as found produces
-    #     class_caen_dgtz.h:33: fatal error: CAENDigitizer.h: No such file
-    # with no -I for it anywhere on the command line.
+    # Getting the CAEN headers onto the command line is fiddly, and the two
+    # obvious approaches are both wrong:
     #
-    # Raw compile options are never pruned, so pass -I that way unconditionally
-    # rather than trying to predict when CMake will drop it. Harmless when the
-    # directory is a normal one — just a redundant -I.
+    #  * target_include_directories(PUBLIC /usr/include) produces NO flag at
+    #    all. CMake prunes standard system directories from the -I list for
+    #    GNU-like compilers, whether or not they appear in
+    #    CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES. Normally harmless, because the
+    #    compiler searches /usr/include by itself — but x86_64-conda-linux-gnu-c++
+    #    builds against its own sysroot and does not, so the build fails with
+    #        class_caen_dgtz.h:33: fatal error: CAENDigitizer.h: No such file
+    #    on a header CMake just reported as found.
     #
-    # These land after the target's own include directories, so the vendored
-    # CAENDigitizerType.h keeps precedence over the installed one: DataFrame.h
-    # and the real CAENDigitizer.h then agree on one set of type/enum defs.
+    #  * Forcing -I/usr/include is WORSE. It puts the host's /usr/include ahead
+    #    of the sysroot, mixing host glibc headers into the sysroot ones
+    #    (/usr/include/bits/stdlib-float.h pulled into the sysroot's stdlib.h);
+    #    every translation unit then dies on __BEGIN_NAMESPACE_STD, div_t,
+    #    strtol... CMake's pruning exists precisely to prevent that.
+    #
+    # -idirafter is the tool for the job: searched only after all -I paths AND
+    # all standard system directories are exhausted. stdlib.h still resolves
+    # from the sysroot; CAENDigitizer.h, which nothing else provides, falls
+    # through to /usr/include. It also counts as a system directory, so
+    # third-party headers do not spray warnings.
+    #
+    # Being searched last also keeps the vendored CAENDigitizerType.h ahead of
+    # any installed copy, so DataFrame.h and the real CAENDigitizer.h agree on
+    # one set of type/enum definitions.
+    #
+    # Joined spelling (-idirafter<dir>, no space) so CMake cannot split or
+    # reorder the option away from its argument.
     function(caendaq_add_include_dir target dir)
         if(NOT dir)
             return()
@@ -281,20 +296,39 @@ if(CAENDAQ_CAEN_ENABLED)
         if(MSVC)
             target_include_directories(${target} PUBLIC "${dir}")
         else()
-            target_compile_options(${target} PUBLIC "-I${dir}")
+            target_compile_options(${target} PUBLIC "-idirafter${dir}")
         endif()
     endfunction()
 
     caendaq_add_include_dir(caendaq "${CAEN_DGTZ_INCLUDE_DIR}")
     caendaq_add_include_dir(caendaq "${JSONCPP_INCLUDE_DIR}")
+
+    # The linker side has the mirror-image problem of the include side. Given an
+    # absolute library path that sits in a standard link directory, CMake may
+    # rewrite it to a plain -lCAENDigitizer, on the assumption that the linker
+    # searches /usr/lib itself. The conda toolchain's ld does not, so the link
+    # dies with
+    #     ld: cannot find -lCAENDigitizer: No such file or directory
+    # even though /usr/lib/libCAENDigitizer.so is right there.
+    #
+    # Rather than depend on which form CMake emits, make both work: keep the
+    # absolute path AND put its directory on the search path so a rewritten -l
+    # still resolves. This -L is appended after the toolchain's own -L entries,
+    # so conda-provided libraries still win and no host library is preferred
+    # over an environment one.
+    get_filename_component(_caen_libdir "${CAEN_DGTZ_LIBRARY}" DIRECTORY)
+    if(_caen_libdir)
+        target_link_directories(caendaq PUBLIC "${_caen_libdir}")
+    endif()
     target_link_libraries(caendaq PUBLIC ${CAEN_DGTZ_LIBRARY} PRIVATE ${JSONCPP_LINK})
 
     message(STATUS "CaenDAQ: CAEN backend ENABLED (hardware acquisition available)")
     message(STATUS "  header : ${CAEN_DGTZ_INCLUDE_DIR}/CAENDigitizer.h")
     message(STATUS "  library: ${CAEN_DGTZ_LIBRARY}")
+    message(STATUS "  linkdir: -L${_caen_libdir} (so a rewritten -lCAENDigitizer resolves)")
     # Echo the actual flag: CMake silently prunes system dirs from the -I list,
     # so "found it" and "the compiler will see it" are different claims.
-    message(STATUS "  flag   : -I${CAEN_DGTZ_INCLUDE_DIR} (forced, not pruneable)")
+    message(STATUS "  flag   : -idirafter${CAEN_DGTZ_INCLUDE_DIR}")
 
     # The vendored driver is compiled against vendor/rureader/CAENDigitizerType.h
     # while linking the installed libCAENDigitizer. Note it when the installed
