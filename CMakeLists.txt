@@ -215,15 +215,39 @@ endif()
 # results into the target.
 if(CAENDAQ_CAEN_ENABLED)
     target_compile_definitions(caendaq PUBLIC CAENDAQ_WITH_CAEN)
-    # Appended AFTER vendor/rureader, so the vendored CAENDigitizerType.h keeps
-    # precedence over the installed one. Deliberate: DataFrame.h and the real
-    # CAENDigitizer.h then agree on one set of type/enum definitions.
     target_include_directories(caendaq
-        PUBLIC  ${CAEN_DGTZ_INCLUDE_DIR}
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/vendor/caen)
-    if(JSONCPP_INCLUDE_DIR)
-        target_include_directories(caendaq PRIVATE ${JSONCPP_INCLUDE_DIR})
-    endif()
+
+    # CMake DELETES any directory that is already in the compiler's implicit
+    # include search path from the -I flags it generates. For CAEN that is the
+    # normal case: the installer puts the headers straight into /usr/include, so
+    # the target ends up with no flag for them at all. That is harmless only
+    # while the compiler really does search /usr/include by itself — a conda
+    # toolchain that builds against a sysroot does not, and then the build dies
+    # on the header it just "found":
+    #     class_caen_dgtz.h:33: fatal error: CAENDigitizer.h: No such file
+    # Raw compile options are never pruned, so pass -I explicitly in that case.
+    #
+    # Appended AFTER vendor/rureader either way, so the vendored
+    # CAENDigitizerType.h keeps precedence over the installed one: DataFrame.h
+    # and the real CAENDigitizer.h then agree on one set of type/enum defs.
+    function(caendaq_add_include_dir target dir)
+        if(NOT dir)
+            return()
+        endif()
+        list(FIND CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES "${dir}" _idx)
+        if(_idx EQUAL -1 OR MSVC)
+            target_include_directories(${target} PUBLIC "${dir}")
+        else()
+            # Implicit dir: a target_include_directories() entry would be pruned.
+            target_compile_options(${target} PUBLIC "-I${dir}")
+            message(STATUS "  note   : ${dir} is an implicit include dir — passing "
+                           "-I explicitly so CMake cannot prune it")
+        endif()
+    endfunction()
+
+    caendaq_add_include_dir(caendaq "${CAEN_DGTZ_INCLUDE_DIR}")
+    caendaq_add_include_dir(caendaq "${JSONCPP_INCLUDE_DIR}")
     target_link_libraries(caendaq PUBLIC ${CAEN_DGTZ_LIBRARY} PRIVATE ${JSONCPP_LINK})
 
     message(STATUS "CaenDAQ: CAEN backend ENABLED (hardware acquisition available)")
