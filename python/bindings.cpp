@@ -92,21 +92,27 @@ PYBIND11_MODULE(caendaq, m) {
         .def(py::init([](const std::string& output_dir, std::uint32_t run,
                          std::uint64_t max_file_bytes, bool write_header,
                          const std::string& graphite_host, int graphite_port,
+                         const std::string& graphite_prefix,
                          int stats_interval_ms) {
                  Daq::Options o;
                  o.maxFileBytes    = max_file_bytes;
                  o.writeHeader     = write_header;
                  o.graphiteHost    = graphite_host;
                  o.graphitePort    = graphite_port;
+                 if (!graphite_prefix.empty()) o.graphitePrefix = graphite_prefix;
                  o.statsIntervalMs = stats_interval_ms;
                  return std::make_unique<Daq>(output_dir, run, o);
              }),
              py::arg("output_dir"), py::arg("run") = 0,
              py::arg("max_file_bytes") = 0, py::arg("write_header") = true,
              py::arg("graphite_host") = "", py::arg("graphite_port") = 2003,
+             py::arg("graphite_prefix") = "ancillary.rates",
              py::arg("stats_interval_ms") = 1000,
              "Create a DAQ writing .caendat files into output_dir for run `run`. "
-             "Set graphite_host to also push rates to a Carbon server.\n\n"
+             "Set graphite_host to also push rates to a Carbon server, under "
+             "graphite_prefix — one subtree per experiment, e.g. "
+             "'ancillary.rates.12c12c'. Boards appear below it as bo_<VME board "
+             "id>, so the prefix never has to name a board.\n\n"
              "Synchronisation is NOT configured here: it comes from each board's "
              "own Acquisition Control register (0x8100). A board whose start mode "
              "is not 'SW controlled' is armed instead of started, and once every "
@@ -156,8 +162,11 @@ PYBIND11_MODULE(caendaq, m) {
         .def("stop",    &Daq::stop,    py::call_guard<py::gil_scoped_release>())
 
         .def("set_graphite", &Daq::setGraphite, py::arg("host"), py::arg("port") = 2003,
+             py::arg("prefix") = "",
              "Change the Graphite/Carbon target of the running stats collector "
-             "(empty host disables it).")
+             "(empty host disables it) and, optionally, the metric prefix — the "
+             "experiment's subtree, e.g. 'ancillary.rates.12c12c'. An empty prefix "
+             "leaves the current one alone.")
 
         .def("write_register", &Daq::writeRegister,
              py::arg("board"), py::arg("address"), py::arg("value"),
@@ -274,6 +283,7 @@ PYBIND11_MODULE(caendaq, m) {
             for (const auto& b : d.stats()) {
                 py::dict bd;
                 bd["name"] = b.name;
+                bd["board_id"] = b.boardRegId;   // VME board id — the 'bo_' in metric paths
                 bd["write_rate"] = b.writeRate;
                 bd["board_failures"] = b.boardFail;   // cumulative this run
                 bd["failed"] = (b.boardFail > 0);

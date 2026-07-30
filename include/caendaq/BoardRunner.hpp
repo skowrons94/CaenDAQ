@@ -51,14 +51,26 @@ public:
     bool synchronised() const { return dgtz_->synchronised(); }
     std::uint32_t startMode() const { return dgtz_->startMode(); }
 
-    // Start acquisition (software start) and spawn the reader thread.
-    // prepare() must have run.
+    // Start acquisition (software start). prepare() must have run. Does NOT
+    // spawn the reader — call startReader() once the whole chain is going.
     bool start();
 
-    // Arm a synchronised board and spawn its reader thread. The board produces
-    // nothing until its external start arrives, but the reader is already
-    // running so not a single buffer is missed once it does.
+    // Arm a synchronised board, which then produces nothing until its external
+    // start arrives. Does NOT spawn the reader either, for the same reason.
     bool arm();
+
+    // Spawn the reader (and the decode tap). Must be called only after every
+    // board is actually acquiring — i.e. after the master's software trigger.
+    //
+    // The reader cannot be brought up at arm() time, tempting as it is to have
+    // the pipeline already draining when the chain fires: a board that is armed
+    // but not yet started has no data, so its blocking MBLT read sits in the
+    // driver holding the lock that serialises the link. Boards sharing one
+    // USB/optical bridge then deadlock outright — the master can never get the
+    // link to send the software trigger, so no data ever arrives and the read
+    // never returns. Deferring costs only the microseconds until the first
+    // read; the board buffers meanwhile, so nothing is lost.
+    void startReader();
 
     // Fire the software trigger that starts a daisy chain (master only).
     bool sendSWTrigger() { return dgtz_->sendSWTrigger(); }

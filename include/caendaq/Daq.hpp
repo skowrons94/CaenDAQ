@@ -44,6 +44,8 @@ public:
         bool          writeHeader   = true;
         std::string   graphiteHost;          // empty = no Graphite push
         int           graphitePort  = 2003;
+        // Root of the metric tree, one subtree per experiment (see StatsCollector).
+        std::string   graphitePrefix = "ancillary.rates";
         int           statsIntervalMs = 1000;
     };
 
@@ -111,8 +113,9 @@ public:
     std::vector<BoardRate> stats() const;
 
     // Change the Graphite/Carbon target for the running stats collector (empty
-    // host disables it). No-op if no run is active.
-    void setGraphite(const std::string& host, int port);
+    // host disables it) and, optionally, the metric prefix — the experiment's
+    // subtree. An empty prefix keeps the current one. No-op if no run is active.
+    void setGraphite(const std::string& host, int port, const std::string& prefix = "");
 
     // ── Online tuning ──────────────────────────────────────────────────────
     // Write/read a register on a board that this Daq has open, including while

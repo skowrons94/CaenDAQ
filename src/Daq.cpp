@@ -161,7 +161,11 @@ bool Daq::start() {
                                              : SyncRole::Slave);
     }
 
-    // All boards are now armed — safe to release the start signal.
+    // All boards are now armed — safe to release the start signal. No reader is
+    // running yet, deliberately: an armed board has no data, so its blocking
+    // MBLT read would sit in the driver holding the lock that serialises the
+    // link, and the master could never get the link to send this trigger. Every
+    // board on one bridge would deadlock. See BoardRunner::startReader().
     if (master >= 0 && !runners_[master]->sendSWTrigger()) {
         LOG_ERROR("Daq: the software trigger failed on master board "
                   << runners_[master]->name()
@@ -170,11 +174,15 @@ bool Daq::start() {
         teardownWriter();
         return false;
     }
+
+    // The chain is going: bring the readout up.
+    for (auto& r : runners_) r->startReader();
     // Start the statistics/Graphite thread (samples the just-started runners).
     StatsCollector::Options sopt;
     sopt.intervalMs   = opt_.statsIntervalMs;
     sopt.graphiteHost = opt_.graphiteHost;
     sopt.graphitePort = opt_.graphitePort;
+    if (!opt_.graphitePrefix.empty()) sopt.prefix = opt_.graphitePrefix;
     stats_ = std::make_unique<StatsCollector>([this] { return sampleStats(); }, sopt);
     stats_->start();
 
@@ -235,6 +243,7 @@ std::vector<BoardSample> Daq::sampleStats() const {
     for (const auto& r : runners_) {
         BoardSample bs;
         bs.name         = r->name();
+        bs.boardRegId   = static_cast<std::uint16_t>(r->boardInfo().boardRegId);
         bs.bytesWritten = r->bytesWritten();
         bs.boardFail    = r->boardFailures();
         HistogramStore& h = r->histograms();
@@ -254,10 +263,11 @@ std::vector<BoardRate> Daq::stats() const {
     return stats_ ? stats_->snapshot() : std::vector<BoardRate>{};
 }
 
-void Daq::setGraphite(const std::string& host, int port) {
+void Daq::setGraphite(const std::string& host, int port, const std::string& prefix) {
     opt_.graphiteHost = host;
     opt_.graphitePort = port;
-    if (stats_) stats_->setGraphite(host, port);
+    if (!prefix.empty()) opt_.graphitePrefix = prefix;
+    if (stats_) stats_->setGraphite(host, port, prefix);
 }
 
 bool Daq::writeRegister(int board, std::uint32_t address, std::uint32_t value) {
