@@ -30,9 +30,17 @@ std::unique_ptr<IDigitizer> Daq::makeDigitizer(const BoardSpec& spec, std::size_
 #ifdef CAENDAQ_WITH_CAEN
     return std::make_unique<CaenDigitizer>(spec.params);
 #else
+    // Not a board-model limitation: every model goes through this same branch.
+    // The module simply was not compiled against libCAENDigitizer.
     LOG_ERROR("Daq: real board '" << spec.params.name
-              << "' requested but this build has no CAEN support "
-                 "(rebuild with -DCAENDAQ_WITH_CAEN=ON, or use mock=true)");
+              << "' requested but this build of CaenDAQ has no CAEN support "
+                 "(applies to every model, not just this one). Check "
+                 "caendaq.HAS_CAEN: if it is False, the module was built "
+                 "without libCAENDigitizer/jsoncpp — install them and "
+                 "reinstall (the build auto-detects them; use "
+                 "CAENDAQ_WITH_CAEN=ON to make a missing install a hard error "
+                 "instead of a silent mock-only build). To run without "
+                 "hardware, use mock=true / TEST_FLAG=True");
     return nullptr;
 #endif
 }
