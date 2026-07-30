@@ -27,7 +27,7 @@ stays per board (its own HistogramStore).
   failures are returned as `bool` and logged. Two implementations:
   * `MockDigitizer` — fabricates CAEN-style aggregate buffers, so the entire
     pipeline runs and is testable **without hardware or CAEN libraries**.
-  * `CaenDigitizer` — the real board (built only with `-DCAENDAQ_WITH_CAEN=ON`);
+  * `CaenDigitizer` — the real board (compiled in when `libCAENDigitizer` is found);
     a thin adapter over the vendored `class_caen_dgtz` driver, adding
     auto-reconnect and exposing `BoardInfo` for the file header.
 * **`BlockQueue`** — bounded, thread-safe queue decoupling the time-critical
@@ -74,9 +74,11 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```
 
-Mock-only build needs just a C++17 compiler + threads (no external deps). For a
-real board add `-DCAENDAQ_WITH_CAEN=ON` (requires `libCAENDigitizer` **and**
-`jsoncpp`, which the vendored driver uses to parse its register-config files).
+Needs just a C++17 compiler + threads (no external deps) for the mock backend.
+The real-board backend is **detected automatically**: install `libCAENDigitizer`
+**and** `jsoncpp` (the vendored driver uses it to parse register-config files)
+and it is compiled in. Add `-DCAENDAQ_WITH_CAEN=ON` to turn a missing CAEN
+install into a configure error instead of a silent mock-only build.
 
 ## Run (mock source — no hardware needed)
 
@@ -88,7 +90,8 @@ real board add `-DCAENDAQ_WITH_CAEN=ON` (requires `libCAENDigitizer` **and**
 
 ## Run (real CAEN board)
 
-Build with `-DCAENDAQ_WITH_CAEN=ON`, then:
+Build on a machine with `libCAENDigitizer` installed (use
+`-DCAENDAQ_WITH_CAEN=ON` to confirm it was picked up), then:
 
 ```bash
 # --caen <conn> <link> <node> <base>   conn: 0=USB, 1=Optical, 5=A4818, ...
@@ -243,12 +246,32 @@ Builds via CMake (scikit-build-core) and installs into that env's site-packages:
 
 ```bash
 conda activate luna              # the env your server runs in
-pip install .                    # mock-only backend (works anywhere, TEST_FLAG=True)
-# ...with real CAEN hardware (needs libCAENDigitizer + jsoncpp):
+pip install .                    # detects CAEN automatically
+```
+
+**The CAEN backend is auto-detected.** `CAENDAQ_WITH_CAEN` defaults to `AUTO`:
+if `libCAENDigitizer` and `jsoncpp` are on the machine, the hardware backend is
+compiled in; if not, you get a mock-only module that still works with
+`TEST_FLAG=True`. The same command is correct on the DAQ box and on a laptop.
+
+Force the issue when you want a build to fail loudly rather than silently
+degrade — worth doing on the DAQ machine itself:
+
+| Value | Behaviour |
+|---|---|
+| `AUTO` (default) | Use the real backend if found, else mock only |
+| `ON` | Require it; **fail the configure** if it is missing |
+| `OFF` | Never build it, even if installed |
+
+```bash
 pip install . --config-settings=cmake.define.CAENDAQ_WITH_CAEN=ON
 ```
 
-Verify (in the same env): `python -c "import caendaq; print(caendaq.__file__)"`.
+Verify which backend you actually got:
+
+```bash
+python -c "import caendaq; print(caendaq.__file__, 'HAS_CAEN =', caendaq.HAS_CAEN)"
+```
 
 #### "libCAENDigitizer was not found" — but the headers *are* in `/usr/include`
 
@@ -260,7 +283,12 @@ its activation scripts export `CONDA_BUILD_SYSROOT` and a `CMAKE_ARGS` carrying
 with that rerooting bypassed, and the error message prints `CMAKE_SYSROOT` /
 `CMAKE_FIND_ROOT_PATH` so you can see it happening.
 
-If it still misses, point the build at the installation explicitly:
+Because the default is `AUTO`, this failure is **silent** — you get a mock-only
+module instead of an error. `caendaq.HAS_CAEN` is how you catch it, and the
+configure log says `CAEN backend NOT available` with the list of what was
+missing.
+
+If the retry still misses, point the build at the installation explicitly:
 
 ```bash
 pip install . \
@@ -280,8 +308,9 @@ still work if you need to name the two paths individually.
 
 ```bash
 cmake -S . -B build -DCAENDAQ_BUILD_PYTHON=ON \
-      -Dpybind11_DIR="$(python -m pybind11 --cmakedir)" \
-      -DCAENDAQ_WITH_CAEN=ON            # drop for a mock-only build
+      -Dpybind11_DIR="$(python -m pybind11 --cmakedir)"
+      # CAEN is auto-detected; add -DCAENDAQ_WITH_CAEN=ON to require it,
+      # or -DCAENDAQ_WITH_CAEN=OFF to force a mock-only build
 cmake --build build -j                 # produces build/caendaq.*.so
 install -m 755 build/caendaq*.so "$(python -c 'import site; print(site.getsitepackages()[0])')/"
 ```
