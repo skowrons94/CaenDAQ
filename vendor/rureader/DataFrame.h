@@ -35,6 +35,14 @@ struct DataLayout {
   BitRange fmtDP2    { 15, 15 };
 
   int tsBits = 31;              // width of the time stamp field, cached
+
+  // Bits a working board never sets in an event word. They are the handle on
+  // uninitialised board memory: a digitizer that ships a channel aggregate
+  // whose payload was never written returns random words, and random words
+  // light these up. Zero means "no check is known for this family", in which
+  // case nothing is ever rejected. See RUReader::UnpackPHA.
+  uint32_t resTS     = 0;
+  uint32_t resEnergy = 0;
 };
 
 class DataFrame {
@@ -81,6 +89,8 @@ private:
   std::map<std::string, int>      fFlags;
   std::map<std::string, BitRange> fConfigs;
   std::map<std::string, BitRange> fFormats;
+
+  CAEN_DGTZ_DPPFirmware_t fDppType = CAEN_DGTZ_NotDPPFirmware;
 
   uint32_t fDataFormat = 0;
   bool     fFormatSet  = false;

@@ -15,6 +15,7 @@ DataFrame::DataFrame( CAEN_DGTZ_DPPFirmware_t dppType, std::string dgtzName )
   }
 
   fDgtzName = dgtzName;
+  fDppType  = dppType;
 }
 
 void DataFrame::Build( )
@@ -113,6 +114,25 @@ void DataFrame::ResolveLayout( )
                                 : Format( "TR" , BitRange( 15, 15 ) );
 
   l.tsBits = RangeWidth( l.fmtTS );
+
+  // Reserved bits of the event words, per family. Only the x724/x781/x782
+  // DPP-PHA event is listed: its two words are
+  //
+  //   time   [29:0] trigger time tag, [30] roll-over, [31] always 0
+  //   energy [14:0] energy, [15] pile-up, [23:16] EXTRAS, [27:26] in use,
+  //          [25:24] and [31:28] always 0
+  //
+  // and both patterns have been confirmed on real data. The other families are
+  // left at zero rather than guessed at: an unverified mask would throw away
+  // good events. See DataLayout::resTS.
+  const bool x724 = fDgtzName.find( "724" ) != std::string::npos ||
+                    fDgtzName.find( "781" ) != std::string::npos ||
+                    fDgtzName.find( "782" ) != std::string::npos;
+
+  if( x724 && fDppType == CAEN_DGTZ_DPPFirmware_PHA ){
+    l.resTS     = 0x80000000;
+    l.resEnergy = 0xF3000000;
+  }
 
   // Event size, in 32 bit words.
   uint16_t size = 0;

@@ -59,9 +59,16 @@ private:
     std::vector<std::int16_t>         wave_;   // reusable trace buffer
     std::uint64_t                     corrupt_   = 0; // skipped/corrupt aggregates
     std::uint64_t                     boardFail_ = 0; // aggregates with the board-fail bit set
+    std::uint64_t                     uninitialised_       = 0; // channel aggregates of random words
+    std::uint64_t                     uninitialisedEvents_ = 0; // the events they claimed
 
 public:
     std::uint64_t corruptCount() const { return corrupt_; }
+    // Channel aggregates whose two-word header was valid but whose payload was
+    // random — the board never wrote it. Their events are NOT decoded and do
+    // not reach the rates. Cumulative for the life of this decoder (one run).
+    std::uint64_t uninitialisedCount() const { return uninitialised_; }
+    std::uint64_t uninitialisedEvents() const { return uninitialisedEvents_; }
     // Number of aggregates whose header carried the board-FAIL bit (bit 26):
     // the board signalled it could not sustain the readout (buffer/internal
     // error). Cumulative for the life of this decoder (i.e. one run).

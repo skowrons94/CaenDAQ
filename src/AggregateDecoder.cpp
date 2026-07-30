@@ -117,6 +117,27 @@ void AggregateDecoder::decodePHA(const std::uint32_t* buf, std::uint32_t board,
         const std::uint32_t nEvents = (coupleSize - 2) / layout.evtSize;
         const std::uint32_t base    = pos + 2;
 
+        // A board that ships a channel aggregate whose payload it never wrote
+        // returns a correct two-word header followed by random words. Random
+        // words set bits the board never uses; one such event condemns the
+        // whole aggregate, because the corruption has only ever been observed
+        // all-or-nothing. Without this the online rates count noise as events
+        // — a third of them in the run that exposed this. See DataLayout::resTS.
+        if (layout.resTS || layout.resEnergy) {
+            bool invalid = false;
+            for (std::uint32_t evt = 0; evt < nEvents && !invalid; ++evt) {
+                const std::uint32_t ev = base + evt * layout.evtSize;
+                invalid = (buf[ev] & layout.resTS) != 0 ||
+                          (buf[ev + layout.evtSize - 1] & layout.resEnergy) != 0;
+            }
+            if (invalid) {
+                ++uninitialised_;
+                uninitialisedEvents_ += nEvents;
+                pos += coupleSize;
+                continue;
+            }
+        }
+
         for (std::uint32_t evt = 0; evt < nEvents; ++evt) {
             const std::uint32_t ev = base + evt * layout.evtSize;
             const std::uint32_t timeWord   = buf[ev];
