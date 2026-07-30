@@ -257,31 +257,31 @@ if(CAENDAQ_CAEN_ENABLED)
     target_include_directories(caendaq
         PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/vendor/caen)
 
-    # CMake DELETES any directory that is already in the compiler's implicit
-    # include search path from the -I flags it generates. For CAEN that is the
-    # normal case: the installer puts the headers straight into /usr/include, so
-    # the target ends up with no flag for them at all. That is harmless only
-    # while the compiler really does search /usr/include by itself — a conda
-    # toolchain that builds against a sysroot does not, and then the build dies
-    # on the header it just "found":
+    # CMake DROPS standard system directories from the -I flags it generates,
+    # /usr/include above all — it does that for GNU-like compilers whether or
+    # not the directory appears in CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES, so
+    # testing that list is not enough. The pruning is normally harmless because
+    # the compiler searches /usr/include by itself. A conda toolchain does not:
+    # x86_64-conda-linux-gnu-c++ builds against its own sysroot, so a header
+    # CMake happily reported as found produces
     #     class_caen_dgtz.h:33: fatal error: CAENDigitizer.h: No such file
-    # Raw compile options are never pruned, so pass -I explicitly in that case.
+    # with no -I for it anywhere on the command line.
     #
-    # Appended AFTER vendor/rureader either way, so the vendored
+    # Raw compile options are never pruned, so pass -I that way unconditionally
+    # rather than trying to predict when CMake will drop it. Harmless when the
+    # directory is a normal one — just a redundant -I.
+    #
+    # These land after the target's own include directories, so the vendored
     # CAENDigitizerType.h keeps precedence over the installed one: DataFrame.h
     # and the real CAENDigitizer.h then agree on one set of type/enum defs.
     function(caendaq_add_include_dir target dir)
         if(NOT dir)
             return()
         endif()
-        list(FIND CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES "${dir}" _idx)
-        if(_idx EQUAL -1 OR MSVC)
+        if(MSVC)
             target_include_directories(${target} PUBLIC "${dir}")
         else()
-            # Implicit dir: a target_include_directories() entry would be pruned.
             target_compile_options(${target} PUBLIC "-I${dir}")
-            message(STATUS "  note   : ${dir} is an implicit include dir — passing "
-                           "-I explicitly so CMake cannot prune it")
         endif()
     endfunction()
 
@@ -292,6 +292,9 @@ if(CAENDAQ_CAEN_ENABLED)
     message(STATUS "CaenDAQ: CAEN backend ENABLED (hardware acquisition available)")
     message(STATUS "  header : ${CAEN_DGTZ_INCLUDE_DIR}/CAENDigitizer.h")
     message(STATUS "  library: ${CAEN_DGTZ_LIBRARY}")
+    # Echo the actual flag: CMake silently prunes system dirs from the -I list,
+    # so "found it" and "the compiler will see it" are different claims.
+    message(STATUS "  flag   : -I${CAEN_DGTZ_INCLUDE_DIR} (forced, not pruneable)")
 
     # The vendored driver is compiled against vendor/rureader/CAENDigitizerType.h
     # while linking the installed libCAENDigitizer. Note it when the installed
