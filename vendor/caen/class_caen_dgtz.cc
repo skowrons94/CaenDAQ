@@ -271,7 +271,46 @@ void CAENDgtz::Activate
 	  // ADC Calibration
 	  WriteRegister( 0x809C, 1 );
 	}
-	
+
+	// 0xF030 is a board-version byte that not every board carries the value
+	// this table expects: the V1724G at LUNA reports 0x44, which matches none
+	// of the ranges above and leaves nsPerSample at 0. That zero is not
+	// cosmetic — it is written into the .caendat header, where RUReader
+	// identifies the board by (sampling period, channels) and gives up, and it
+	// is a divisor in the gate/delay setters further down.
+	//
+	// CAEN_DGTZ_GetInfo already told us the family, so use it when the byte
+	// does not resolve. Only the timing fields are filled in: the ADC
+	// calibration above stays tied to a positive 0xF030 match, since that is a
+	// write to the hardware and should not fire on an inferred identity.
+	if( boardInfo.vers == 0 ){
+	  switch( boardInfo.FamilyCode ){
+	  case CAEN_DGTZ_XX724_FAMILY_CODE:
+	    boardInfo.vers = 724; boardInfo.nsPerSample = 10; boardInfo.nsPerTimetag =  8; break;
+	  case CAEN_DGTZ_XX720_FAMILY_CODE:
+	    boardInfo.vers = 720; boardInfo.nsPerSample =  4; boardInfo.nsPerTimetag =  8; break;
+	  case CAEN_DGTZ_XX751_FAMILY_CODE:
+	    boardInfo.vers = 751; boardInfo.nsPerSample =  1; boardInfo.nsPerTimetag =  8; break;
+	  case CAEN_DGTZ_XX730_FAMILY_CODE:
+	    boardInfo.vers = 730; boardInfo.nsPerSample =  2; boardInfo.nsPerTimetag =  8; break;
+	  case CAEN_DGTZ_XX725_FAMILY_CODE:
+	    boardInfo.vers = 725; boardInfo.nsPerSample =  4; boardInfo.nsPerTimetag = 16; break;
+	  default:
+	    std::cerr << boardName.data() << ": board version 0x" << std::hex << vers
+		      << std::dec << " is not in the table and family code "
+		      << boardInfo.FamilyCode << " is unknown — the sampling period "
+		      << "stays 0, so .caendat headers will not identify this board."
+		      << std::endl;
+	    break;
+	  }
+	  if( boardInfo.vers != 0 ){
+	    std::cout << boardName.data() << ": board version 0x" << std::hex << vers
+		      << std::dec << " not in the table; identified as " << boardInfo.vers
+		      << " from family code " << boardInfo.FamilyCode << " ("
+		      << 0 + boardInfo.nsPerSample << " ns/sample)" << std::endl;
+	  }
+	}
+
 	if( verboseDebug ){
 	  std::cout << "vers: 0x" << std::hex << vers << std::dec << ";";
 	  std::cout << " ";
