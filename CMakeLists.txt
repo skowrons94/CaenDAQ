@@ -207,6 +207,26 @@ if(_caen_wanted)
         endif()
     else()
         set(CAENDAQ_CAEN_ENABLED TRUE)
+
+        # CMake treats every directory in CMAKE_CXX_IMPLICIT_LINK_DIRECTORIES as
+        # "the linker already searches this", and acts on that in two ways: an
+        # absolute library path there is rewritten to a bare -lname, and any
+        # matching -L is pruned from the link line. For CAEN in /usr/lib both
+        # fire at once, which is why the link failed with
+        #     ld: cannot find -lCAENDigitizer: No such file or directory
+        # while -L/usr/lib never appeared on the command line. The assumption is
+        # false for the conda toolchain: its ld searches its own sysroot, not
+        # /usr/lib.
+        #
+        # Dropping the directory from that list makes CMake stop eliding it — it
+        # then emits the -L (and an -Wl,-rpath, which fixes the runtime lookup
+        # too). Scoped to the one directory the CAEN library lives in, and done
+        # here because link information is computed from the directory-scope
+        # value in effect when the targets are created.
+        get_filename_component(_caen_libdir "${CAEN_DGTZ_LIBRARY}" DIRECTORY)
+        if(_caen_libdir)
+            list(REMOVE_ITEM CMAKE_CXX_IMPLICIT_LINK_DIRECTORIES "${_caen_libdir}")
+        endif()
     endif()
 else()
     message(STATUS "CaenDAQ: CAEN backend disabled by CAENDAQ_WITH_CAEN=${CAENDAQ_WITH_CAEN}")
@@ -313,10 +333,10 @@ if(CAENDAQ_CAEN_ENABLED)
     #
     # Rather than depend on which form CMake emits, make both work: keep the
     # absolute path AND put its directory on the search path so a rewritten -l
-    # still resolves. This -L is appended after the toolchain's own -L entries,
-    # so conda-provided libraries still win and no host library is preferred
-    # over an environment one.
-    get_filename_component(_caen_libdir "${CAEN_DGTZ_LIBRARY}" DIRECTORY)
+    # still resolves. Only effective together with the REMOVE_ITEM above, which
+    # is what stops CMake pruning this -L again. It is appended after the
+    # toolchain's own -L entries, so conda-provided libraries still win and no
+    # host library is preferred over an environment one.
     if(_caen_libdir)
         target_link_directories(caendaq PUBLIC "${_caen_libdir}")
     endif()
