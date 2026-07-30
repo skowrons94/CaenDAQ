@@ -44,6 +44,22 @@ bool BoardRunner::start() {
     return true;
 }
 
+bool BoardRunner::arm() {
+    if (running_.exchange(true)) return true; // already armed / running
+    if (!dgtz_->arm()) {
+        LOG_ERROR(name() << ": could not arm the acquisition");
+        running_ = false;
+        return false;
+    }
+    // Bring the reader up now, while the board is still waiting for its start
+    // signal: the moment the chain fires, the pipeline is already draining.
+    if (decodeStage_) decodeStage_->start();
+    readerThread_ = std::thread([this] { readerLoop(); });
+    boardInfo_ = dgtz_->info();   // refresh: arming changed 0x8100
+    LOG_INFO(name() << ": armed — waiting for the start signal from the chain");
+    return true;
+}
+
 void BoardRunner::stop() {
     if (!running_.exchange(false)) return; // not running / already stopped
 

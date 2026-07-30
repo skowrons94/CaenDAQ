@@ -46,8 +46,32 @@ public:
     // Captures the board identity for the file header (see boardInfo()).
     bool prepare();
 
-    // Start acquisition and spawn the reader thread. prepare() must have run.
+    // Is this board configured to wait for an external start signal? Read from
+    // its own Acquisition Control register; valid after prepare().
+    bool synchronised() const { return dgtz_->synchronised(); }
+    std::uint32_t startMode() const { return dgtz_->startMode(); }
+
+    // Start acquisition (software start) and spawn the reader thread.
+    // prepare() must have run.
     bool start();
+
+    // Arm a synchronised board and spawn its reader thread. The board produces
+    // nothing until its external start arrives, but the reader is already
+    // running so not a single buffer is missed once it does.
+    bool arm();
+
+    // Fire the software trigger that starts a daisy chain (master only).
+    bool sendSWTrigger() { return dgtz_->sendSWTrigger(); }
+
+    // Online tuning: change a register on this board while it is being read out.
+    // Safe to call from another thread — the backend serialises it against the
+    // reader. Which registers may be touched mid-run is decided by the caller.
+    bool writeRegister(std::uint32_t address, std::uint32_t value) {
+        return dgtz_->writeRegister(address, value);
+    }
+    bool readRegister(std::uint32_t address, std::uint32_t* value) {
+        return dgtz_->readRegister(address, value);
+    }
 
     // Stop acquisition, join the reader, stop the decode tap. Idempotent. Does
     // NOT touch the shared file writer — Daq owns that.
@@ -55,6 +79,10 @@ public:
 
     // Board identity, valid after prepare(). Used to build the file header.
     const BoardInfo& boardInfo() const { return boardInfo_; }
+
+    // Record the role this board ended up with in the chain (set by Daq::start()
+    // once the master is known). Reported through boardInfo() for the metadata.
+    void setSyncRole(SyncRole role) { boardInfo_.syncRole = role; }
 
     // Live counters (safe to read from any thread).
     std::uint64_t buffersRead()  const { return buffersRead_.load(); }

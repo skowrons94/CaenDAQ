@@ -25,6 +25,9 @@ MockDigitizer::MockDigitizer(BoardParams params, Options opt)
     info_.nsPerTimetag     = 8;
     info_.rocFirmware      = "mock-roc";
     info_.amcFirmware      = "mock-amc";
+    // Mirror the configured Start/Stop Mode into Acquisition Control (0x8100)
+    // so board_info() reports the same chain a real board would.
+    info_.acquisitionControl = opt_.startMode & 0x3u;
     info_.channelEnableMask = 0xFFFF;
     info_.connType         = params_.connType;
     info_.linkNum          = params_.linkNum;
@@ -49,6 +52,22 @@ bool MockDigitizer::open() {
 bool MockDigitizer::configure() {
     LOG_INFO("MockDigitizer[" << params_.name << "]: configure ("
              << (params_.configPath.empty() ? "no file" : params_.configPath) << ")");
+    return true;
+}
+
+bool MockDigitizer::arm() {
+    // There is no cable and no external start signal here, so an armed mock
+    // board simply begins producing straight away. The distinct entry point
+    // still exercises Daq's arm-everything-then-trigger sequencing, and the log
+    // line shows which boards a real system would have left waiting.
+    LOG_INFO("MockDigitizer[" << params_.name << "]: armed (start mode "
+             << startMode() << "; mock has no external start to wait for)");
+    return start();
+}
+
+bool MockDigitizer::sendSWTrigger() {
+    LOG_INFO("MockDigitizer[" << params_.name << "]: software trigger sent "
+             "(would start the chain on real hardware)");
     return true;
 }
 
@@ -150,6 +169,27 @@ bool MockDigitizer::read(const char** data, std::size_t* size) {
 
     *data = buffer_.data();
     *size = k * sizeof(std::uint32_t);
+    return true;
+}
+
+bool MockDigitizer::writeRegister(std::uint32_t address, std::uint32_t value) {
+    if (!open_) return false;
+    {
+        std::lock_guard<std::mutex> guard(registersMutex_);
+        registers_[address] = value;
+    }
+    LOG_INFO("MockDigitizer[" << params_.name << "]: wrote 0x" << std::hex << value
+             << " to register 0x" << address << std::dec);
+    return true;
+}
+
+bool MockDigitizer::readRegister(std::uint32_t address, std::uint32_t* value) {
+    if (!open_ || value == nullptr) return false;
+    std::lock_guard<std::mutex> guard(registersMutex_);
+    const auto it = registers_.find(address);
+    // Never written online: report zero rather than failing, so a caller can
+    // read any address back without special-casing the mock.
+    *value = (it == registers_.end()) ? 0u : it->second;
     return true;
 }
 

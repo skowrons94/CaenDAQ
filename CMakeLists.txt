@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(CaenDAQ LANGUAGES CXX)
+project(CaenDAQ VERSION 0.1.0 LANGUAGES CXX)
 
 # ---- Options ---------------------------------------------------------------
 option(CAENDAQ_WITH_CAEN   "Build the real CAEN-backed digitizer (needs libCAENDigitizer)" OFF)
@@ -101,6 +101,9 @@ if(CAENDAQ_BUILD_PYTHON)
     pybind11_add_module(caendaq_py python/bindings.cpp)
     set_target_properties(caendaq_py PROPERTIES OUTPUT_NAME caendaq)
     target_link_libraries(caendaq_py PRIVATE caendaq)
+    # Exposed as caendaq.__version__ so runs record which build took the data.
+    target_compile_definitions(caendaq_py PRIVATE
+        CAENDAQ_VERSION="${PROJECT_VERSION}")
     # Install rule so `pip install .` (scikit-build-core) packages the module.
     install(TARGETS caendaq_py LIBRARY DESTINATION .)
     message(STATUS "CaenDAQ: Python module enabled")

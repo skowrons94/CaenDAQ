@@ -32,6 +32,9 @@ struct BoardSpec {
     bool          mockWaveforms = false;   // mock: emit a synthetic trace per event
     std::uint32_t mockFailEvery = 0;       // mock: inject a board-FAIL ~1/N aggregates (0 = never)
     DppType       mockDpp    = DppType::PSD; // mock: firmware to emulate (PHA=energy, PSD=q). From the board's dpp.
+    // mock: Start/Stop Mode to report, taken from the board's real 0x8100 so a
+    // TEST_FLAG run mirrors the configured chain (see StartMode in IDigitizer).
+    std::uint32_t mockStartMode = 0;
 };
 
 class Daq {
@@ -43,6 +46,24 @@ public:
         int           graphitePort  = 2003;
         int           statsIntervalMs = 1000;
     };
+
+    // ── Multi-board synchronisation ────────────────────────────────────────
+    // There is no option for it: synchronisation is decided by the boards' OWN
+    // configuration, exactly as programmed through the WebDAQ dashboard.
+    //
+    // A board whose Acquisition Control (0x8100) start mode is anything other
+    // than "SW controlled" is armed rather than started, and the master (board
+    // register id 0) fires a software trigger once every board is armed. That
+    // pulse leaves the master on TRG-OUT, enters the next board's TRG-IN, and
+    // walks the chain — so all boards share one time origin:
+    //
+    //   board 0 (MASTER)      board 1              board 2
+    //   first-trigger mode    first-trigger mode   first-trigger mode
+    //   SendSWTrigger() ──TRG-OUT──> TRG-IN ──TRG-OUT──> TRG-IN
+    //
+    // Cable TRG-OUT of each board into TRG-IN of the next. Leave a board in
+    // "SW controlled" mode to keep it out of the chain — it just starts on its
+    // own, and its timestamps are not comparable with the rest.
 
     Daq(std::string outputDir, std::uint32_t run, Options opt);
     Daq(std::string outputDir, std::uint32_t run)
@@ -69,6 +90,10 @@ public:
     // Per-board access. `board` is the add order index.
     const std::string& boardName(int board) const;
     HistogramStore&    histograms(int board);
+    // Board identity + firmware + the acquisition registers as actually read
+    // back from the board. Valid after prepare(); this is what run metadata
+    // should record. Throws nothing; returns a default BoardInfo if out of range.
+    BoardInfo          boardInfo(int board) const;
 
     // Per-board live counters.
     std::uint64_t buffersRead(int board) const;
@@ -89,9 +114,28 @@ public:
     // host disables it). No-op if no run is active.
     void setGraphite(const std::string& host, int port);
 
+    // ── Online tuning ──────────────────────────────────────────────────────
+    // Write/read a register on a board that this Daq has open, including while
+    // the run is live: the board backend serialises the access against its
+    // reader thread. `board` is the add order index.
+    //
+    // CaenDAQ performs the access and nothing more. It does not judge whether a
+    // register may be changed during acquisition — that policy belongs to the
+    // caller (WebDAQ keeps an allowlist of the parameters that are safe to move
+    // while data is being taken).
+    //
+    // False if the board index is out of range, the board is not open, or the
+    // access failed.
+    bool writeRegister(int board, std::uint32_t address, std::uint32_t value);
+    bool readRegister(int board, std::uint32_t address, std::uint32_t* value);
+
 private:
     std::unique_ptr<IDigitizer> makeDigitizer(const BoardSpec& spec, std::size_t index) const;
     std::vector<BoardSample>    sampleStats() const;
+    // Index of the board that fires the software trigger starting the chain
+    // (board register id 0, else the first synchronised board), or -1 when no
+    // board is configured for a synchronised start.
+    int masterIndex() const;
     void writerLoop();          // single thread: drains writeQueue_ -> writer_
     void teardownWriter();      // close queue, join writer thread, close file
 
