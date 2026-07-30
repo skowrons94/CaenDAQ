@@ -223,9 +223,17 @@ if(_caen_wanted)
         # too). Scoped to the one directory the CAEN library lives in, and done
         # here because link information is computed from the directory-scope
         # value in effect when the targets are created.
+        # NOTE: CMake keeps TWO such lists and consults both. /usr/lib arrives
+        # via the PLATFORM one on Linux, so cleaning only the CXX one is not
+        # enough — that was a real miss, and the link kept failing.
         get_filename_component(_caen_libdir "${CAEN_DGTZ_LIBRARY}" DIRECTORY)
         if(_caen_libdir)
-            list(REMOVE_ITEM CMAKE_CXX_IMPLICIT_LINK_DIRECTORIES "${_caen_libdir}")
+            foreach(_caen_implicit_var
+                    CMAKE_PLATFORM_IMPLICIT_LINK_DIRECTORIES
+                    CMAKE_CXX_IMPLICIT_LINK_DIRECTORIES
+                    CMAKE_C_IMPLICIT_LINK_DIRECTORIES)
+                list(REMOVE_ITEM ${_caen_implicit_var} "${_caen_libdir}")
+            endforeach()
         endif()
     endif()
 else()
@@ -333,12 +341,26 @@ if(CAENDAQ_CAEN_ENABLED)
     #
     # Rather than depend on which form CMake emits, make both work: keep the
     # absolute path AND put its directory on the search path so a rewritten -l
-    # still resolves. Only effective together with the REMOVE_ITEM above, which
-    # is what stops CMake pruning this -L again. It is appended after the
-    # toolchain's own -L entries, so conda-provided libraries still win and no
-    # host library is preferred over an environment one.
-    if(_caen_libdir)
-        target_link_directories(caendaq PUBLIC "${_caen_libdir}")
+    # still resolves.
+    #
+    # The -L is passed as a raw item to target_link_libraries(), which matters
+    # for two independent reasons:
+    #
+    #  * Not target_link_directories(): a LINK_DIRECTORIES entry is subject to
+    #    the same implicit-directory pruning as the library path itself, so it
+    #    gets silently deleted — which is exactly what kept happening. A raw
+    #    item is passed through untouched, whichever implicit-dir list names
+    #    the directory.
+    #
+    #  * Not target_link_options() either: those are emitted with the linker
+    #    flags, ahead of the environment's own -L entries. That would put
+    #    /usr/lib in front of the conda prefix and let -lpthread resolve to the
+    #    host glibc instead of the sysroot one — the same host/sysroot mixing
+    #    that -idirafter avoids on the include side. As a link-libraries item it
+    #    lands after the environment's flags, so conda-provided libraries keep
+    #    precedence and only libraries nothing else provides fall through here.
+    if(_caen_libdir AND NOT MSVC)
+        target_link_libraries(caendaq PUBLIC "-L${_caen_libdir}")
     endif()
     target_link_libraries(caendaq PUBLIC ${CAEN_DGTZ_LIBRARY} PRIVATE ${JSONCPP_LINK})
 
