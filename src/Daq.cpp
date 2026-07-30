@@ -161,7 +161,11 @@ bool Daq::start() {
                                              : SyncRole::Slave);
     }
 
-    // All boards are now armed — safe to release the start signal.
+    // All boards are now armed — safe to release the start signal. No reader is
+    // running yet, deliberately: an armed board has no data, so its blocking
+    // MBLT read would sit in the driver holding the lock that serialises the
+    // link, and the master could never get the link to send this trigger. Every
+    // board on one bridge would deadlock. See BoardRunner::startReader().
     if (master >= 0 && !runners_[master]->sendSWTrigger()) {
         LOG_ERROR("Daq: the software trigger failed on master board "
                   << runners_[master]->name()
@@ -170,6 +174,9 @@ bool Daq::start() {
         teardownWriter();
         return false;
     }
+
+    // The chain is going: bring the readout up.
+    for (auto& r : runners_) r->startReader();
     // Start the statistics/Graphite thread (samples the just-started runners).
     StatsCollector::Options sopt;
     sopt.intervalMs   = opt_.statsIntervalMs;

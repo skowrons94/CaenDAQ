@@ -38,10 +38,14 @@ bool BoardRunner::start() {
         running_ = false;
         return false;
     }
-    if (decodeStage_) decodeStage_->start();
-    readerThread_ = std::thread([this] { readerLoop(); });
     LOG_INFO(name() << ": run started");
     return true;
+}
+
+void BoardRunner::startReader() {
+    if (readerThread_.joinable()) return;   // already up
+    if (decodeStage_) decodeStage_->start();
+    readerThread_ = std::thread([this] { readerLoop(); });
 }
 
 bool BoardRunner::arm() {
@@ -51,10 +55,9 @@ bool BoardRunner::arm() {
         running_ = false;
         return false;
     }
-    // Bring the reader up now, while the board is still waiting for its start
-    // signal: the moment the chain fires, the pipeline is already draining.
-    if (decodeStage_) decodeStage_->start();
-    readerThread_ = std::thread([this] { readerLoop(); });
+    // The reader stays down until the chain is actually started — see
+    // startReader(), which explains why bringing it up here deadlocks every
+    // board that shares a bridge with the master.
     boardInfo_ = dgtz_->info();   // refresh: arming changed 0x8100
     LOG_INFO(name() << ": armed — waiting for the start signal from the chain");
     return true;
