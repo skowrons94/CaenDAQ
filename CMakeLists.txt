@@ -270,23 +270,44 @@ if(CAENDAQ_CAEN_ENABLED)
     # Appended AFTER vendor/rureader either way, so the vendored
     # CAENDigitizerType.h keeps precedence over the installed one: DataFrame.h
     # and the real CAENDigitizer.h then agree on one set of type/enum defs.
+    # Testing CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES is not enough: CMake also
+    # drops /usr/include from generated -I flags by a rule of its own, whether or
+    # not the compiler reported it as implicit. A conda toolchain reports only its
+    # sysroot (.../x86_64-conda-linux-gnu/sysroot/usr/include), so the check finds
+    # nothing, target_include_directories() is used — and the flag is pruned all
+    # the same, leaving the build to die on the header CMake had just found.
+    #
+    # So pass it as a raw option, which is never pruned, and use -idirafter rather
+    # than -I: that places the directory after every -I, keeping the vendored
+    # CAENDigitizerType.h ahead of the installed one, which is what lets
+    # DataFrame.h and the real CAENDigitizer.h agree on one set of type defs.
     function(caendaq_add_include_dir target dir)
         if(NOT dir)
             return()
         endif()
-        list(FIND CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES "${dir}" _idx)
-        if(_idx EQUAL -1 OR MSVC)
+        if(MSVC)
             target_include_directories(${target} PUBLIC "${dir}")
         else()
-            # Implicit dir: a target_include_directories() entry would be pruned.
-            target_compile_options(${target} PUBLIC "-I${dir}")
-            message(STATUS "  note   : ${dir} is an implicit include dir — passing "
-                           "-I explicitly so CMake cannot prune it")
+            target_compile_options(${target} PUBLIC "-idirafter" "${dir}")
         endif()
     endfunction()
 
     caendaq_add_include_dir(caendaq "${CAEN_DGTZ_INCLUDE_DIR}")
     caendaq_add_include_dir(caendaq "${JSONCPP_INCLUDE_DIR}")
+
+    # The same story on the link line: CMake reduces the full path it just found
+    # to a bare -lCAENDigitizer, and contributes no -L to resolve it with. (This
+    # is not CMP0060 — that policy is already NEW at this cmake_minimum_required.)
+    # The conda linker searches only its own prefix and sysroot, so the bare -l
+    # fails with "ld: cannot find -lCAENDigitizer". Hand it the directory as a raw
+    # link option, which CMake leaves alone; it is appended after the toolchain's
+    # own -L entries, so the environment's libraries keep precedence.
+    if(NOT MSVC)
+        get_filename_component(_caen_libdir "${CAEN_DGTZ_LIBRARY}" DIRECTORY)
+        if(_caen_libdir)
+            target_link_options(caendaq PUBLIC "-L${_caen_libdir}")
+        endif()
+    endif()
     target_link_libraries(caendaq PUBLIC ${CAEN_DGTZ_LIBRARY} PRIVATE ${JSONCPP_LINK})
 
     message(STATUS "CaenDAQ: CAEN backend ENABLED (hardware acquisition available)")
