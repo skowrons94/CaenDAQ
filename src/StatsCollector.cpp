@@ -35,6 +35,8 @@ std::uint32_t keyOf(std::uint16_t board, std::uint16_t ch) {
 StatsCollector::StatsCollector(SampleFn sampler, Options opt)
     : sampler_(std::move(sampler)), opt_(std::move(opt)) {
     opt_.prefix = sanitizePrefix(opt_.prefix);
+    opt_.intervalMs = StatsCollector::clampInterval(opt_.intervalMs);
+    intervalMs_.store(opt_.intervalMs, std::memory_order_relaxed);
     if (!opt_.graphiteHost.empty()) {
         graphite_ = std::make_shared<GraphiteClient>(opt_.graphiteHost, opt_.graphitePort);
         LOG_INFO("StatsCollector: Graphite enabled -> " << opt_.graphiteHost << ":"
@@ -75,6 +77,19 @@ void StatsCollector::setGraphite(const std::string& host, int port, const std::s
     opt_.graphitePort = port;
 }
 
+void StatsCollector::setInterval(int ms) {
+    const int clamped = StatsCollector::clampInterval(ms);
+    if (intervalMs_.exchange(clamped, std::memory_order_relaxed) == clamped) return;
+    {
+        // Taken only to publish the generation bump against the wait's mutex;
+        // the loop re-reads both atomics once it wakes.
+        std::lock_guard<std::mutex> lk(cvMtx_);
+        intervalGen_.fetch_add(1, std::memory_order_relaxed);
+    }
+    cv_.notify_all();
+    LOG_INFO("StatsCollector: sampling interval -> " << clamped << " ms");
+}
+
 void StatsCollector::loop() {
     using clock = std::chrono::steady_clock;
 
@@ -82,13 +97,40 @@ void StatsCollector::loop() {
     try { prev = sampler_(); } catch (...) {}
     auto prevTime = clock::now();
 
+    // The first evaluation comes early so the rate page has numbers on it a
+    // couple of seconds into a run rather than one full interval in. Clamped to
+    // the interval, so a 1 s interval is never delayed to 2 s by this.
+    int wait = std::min(StatsCollector::clampInterval(opt_.firstIntervalMs),
+                        intervalMs_.load(std::memory_order_relaxed));
+
     while (running_.load()) {
+        // Wait out this tick, but stay responsive to setInterval(): it bumps a
+        // generation counter and notifies, which wakes this wait so the deadline
+        // can be recomputed. Otherwise a change from 60 s down to 1 s would not
+        // be felt for up to a minute. Shortening applies to the tick already in
+        // flight; lengthening does not stretch it, it just makes the next one
+        // longer — so the page reacts immediately when asked to go faster.
+        const auto tickStart = clock::now();
         {
             std::unique_lock<std::mutex> lk(cvMtx_);
-            cv_.wait_for(lk, std::chrono::milliseconds(opt_.intervalMs),
-                         [this] { return !running_.load(); });
+            for (;;) {
+                const unsigned int gen = intervalGen_.load(std::memory_order_relaxed);
+                const auto deadline = tickStart + std::chrono::milliseconds(wait);
+                if (!cv_.wait_until(lk, deadline, [this, gen] {
+                        return !running_.load() ||
+                               intervalGen_.load(std::memory_order_relaxed) != gen;
+                    })) {
+                    break;                       // deadline reached normally
+                }
+                if (!running_.load()) break;     // stopping
+                wait = std::min(wait, intervalMs_.load(std::memory_order_relaxed));
+            }
         }
         if (!running_.load()) break;
+
+        // Every tick after the first uses the current interval, so a change made
+        // through setInterval() applies from here on.
+        wait = intervalMs_.load(std::memory_order_relaxed);
 
         std::vector<BoardSample> cur;
         try { cur = sampler_(); } catch (const std::exception& e) {

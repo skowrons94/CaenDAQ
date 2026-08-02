@@ -46,7 +46,12 @@ public:
         int           graphitePort  = 2003;
         // Root of the metric tree, one subtree per experiment (see StatsCollector).
         std::string   graphitePrefix = "ancillary.rates";
+        // Sampling period: also the averaging window and the Graphite push
+        // period (they are one tick, see StatsCollector).
         int           statsIntervalMs = 1000;
+        // How long the first evaluation waits, so a long interval does not leave
+        // the rate page empty at the start of a run. Clamped to statsIntervalMs.
+        int           statsFirstIntervalMs = 2000;
     };
 
     // ── Multi-board synchronisation ────────────────────────────────────────
@@ -116,6 +121,12 @@ public:
     // host disables it) and, optionally, the metric prefix — the experiment's
     // subtree. An empty prefix keeps the current one. No-op if no run is active.
     void setGraphite(const std::string& host, int port, const std::string& prefix = "");
+
+    // Change the statistics sampling period while a run is live. Takes effect on
+    // the spot: shortening it cuts the tick already in flight short. Clamped to
+    // [StatsCollector::kMinIntervalMs, kMaxIntervalMs].
+    void setStatsInterval(int ms);
+    int  statsIntervalMs() const;
 
     // ── Online tuning ──────────────────────────────────────────────────────
     // Write/read a register on a board that this Daq has open, including while

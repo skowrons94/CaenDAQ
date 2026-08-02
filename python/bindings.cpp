@@ -93,14 +93,15 @@ PYBIND11_MODULE(caendaq, m) {
                          std::uint64_t max_file_bytes, bool write_header,
                          const std::string& graphite_host, int graphite_port,
                          const std::string& graphite_prefix,
-                         int stats_interval_ms) {
+                         int stats_interval_ms, int stats_first_interval_ms) {
                  Daq::Options o;
                  o.maxFileBytes    = max_file_bytes;
                  o.writeHeader     = write_header;
                  o.graphiteHost    = graphite_host;
                  o.graphitePort    = graphite_port;
                  if (!graphite_prefix.empty()) o.graphitePrefix = graphite_prefix;
-                 o.statsIntervalMs = stats_interval_ms;
+                 o.statsIntervalMs      = stats_interval_ms;
+                 o.statsFirstIntervalMs = stats_first_interval_ms;
                  return std::make_unique<Daq>(output_dir, run, o);
              }),
              py::arg("output_dir"), py::arg("run") = 0,
@@ -108,6 +109,7 @@ PYBIND11_MODULE(caendaq, m) {
              py::arg("graphite_host") = "", py::arg("graphite_port") = 2003,
              py::arg("graphite_prefix") = "ancillary.rates",
              py::arg("stats_interval_ms") = 1000,
+             py::arg("stats_first_interval_ms") = 2000,
              "Create a DAQ writing .caendat files into output_dir for run `run`. "
              "Set graphite_host to also push rates to a Carbon server, under "
              "graphite_prefix — one subtree per experiment, e.g. "
@@ -167,6 +169,16 @@ PYBIND11_MODULE(caendaq, m) {
              "(empty host disables it) and, optionally, the metric prefix — the "
              "experiment's subtree, e.g. 'ancillary.rates.12c12c'. An empty prefix "
              "leaves the current one alone.")
+
+        .def("set_stats_interval", &Daq::setStatsInterval, py::arg("ms"),
+             "Change the statistics sampling period (ms) while a run is live.\n\n"
+             "This is one knob for three things, because one tick does all of "
+             "them: how often rates are evaluated, the window they are averaged "
+             "over, and how often they are pushed to Graphite. Shortening it "
+             "takes effect immediately — the tick in flight is cut short — so the "
+             "rate page speeds up straight away. Clamped to [100 ms, 600000 ms].")
+        .def("stats_interval", &Daq::statsIntervalMs,
+             "Current statistics sampling period in ms.")
 
         .def("write_register", &Daq::writeRegister,
              py::arg("board"), py::arg("address"), py::arg("value"),

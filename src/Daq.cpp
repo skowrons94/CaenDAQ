@@ -179,7 +179,8 @@ bool Daq::start() {
     for (auto& r : runners_) r->startReader();
     // Start the statistics/Graphite thread (samples the just-started runners).
     StatsCollector::Options sopt;
-    sopt.intervalMs   = opt_.statsIntervalMs;
+    sopt.intervalMs      = opt_.statsIntervalMs;
+    sopt.firstIntervalMs = opt_.statsFirstIntervalMs;
     sopt.graphiteHost = opt_.graphiteHost;
     sopt.graphitePort = opt_.graphitePort;
     if (!opt_.graphitePrefix.empty()) sopt.prefix = opt_.graphitePrefix;
@@ -268,6 +269,20 @@ void Daq::setGraphite(const std::string& host, int port, const std::string& pref
     opt_.graphitePort = port;
     if (!prefix.empty()) opt_.graphitePrefix = prefix;
     if (stats_) stats_->setGraphite(host, port, prefix);
+}
+
+void Daq::setStatsInterval(int ms) {
+    // Remembered on Options too, so a collector built later (a subsequent run on
+    // this Daq) starts at the interval the operator last chose.
+    // Clamped here too: setStatsInterval() may be called before a run exists,
+    // and statsIntervalMs() would otherwise report a value the collector will
+    // never actually use.
+    opt_.statsIntervalMs = StatsCollector::clampInterval(ms);
+    if (stats_) stats_->setInterval(opt_.statsIntervalMs);
+}
+
+int Daq::statsIntervalMs() const {
+    return stats_ ? stats_->intervalMs() : opt_.statsIntervalMs;
 }
 
 bool Daq::writeRegister(int board, std::uint32_t address, std::uint32_t value) {

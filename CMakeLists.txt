@@ -418,4 +418,11 @@ if(CAENDAQ_BUILD_TESTS)
     target_link_libraries(graphite_test PRIVATE caendaq)
     add_test(NAME graphite_test COMMAND graphite_test)
     set_tests_properties(graphite_test PROPERTIES TIMEOUT 30)
+
+    # Asserts the stats pacing an operator actually feels: the first evaluation
+    # arrives early, and shortening the interval from the UI applies at once.
+    add_executable(stats_interval_test tests/stats_interval_test.cpp)
+    target_link_libraries(stats_interval_test PRIVATE caendaq)
+    add_test(NAME stats_interval_test COMMAND stats_interval_test)
+    set_tests_properties(stats_interval_test PROPERTIES TIMEOUT 60)
 endif()
