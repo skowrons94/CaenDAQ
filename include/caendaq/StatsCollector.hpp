@@ -77,12 +77,16 @@ public:
 
 private:
     void loop();
-    std::string formatGraphite(const std::vector<BoardRate>& rates, long long epoch) const;
+    std::string formatGraphite(const std::vector<BoardRate>& rates,
+                               const std::string& prefix, long long epoch) const;
 
     SampleFn                        sampler_;
     Options                         opt_;
     mutable std::mutex              graphiteMtx_;
-    std::unique_ptr<GraphiteClient> graphite_;
+    // shared_ptr, not unique_ptr: loop() takes a reference under the lock and
+    // sends with it released, so setGraphite() can retarget concurrently
+    // without destroying a client that is mid-write.
+    std::shared_ptr<GraphiteClient> graphite_;
 
     std::thread             thread_;
     std::atomic<bool>       running_{false};

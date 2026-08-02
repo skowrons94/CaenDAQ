@@ -36,7 +36,7 @@ StatsCollector::StatsCollector(SampleFn sampler, Options opt)
     : sampler_(std::move(sampler)), opt_(std::move(opt)) {
     opt_.prefix = sanitizePrefix(opt_.prefix);
     if (!opt_.graphiteHost.empty()) {
-        graphite_ = std::make_unique<GraphiteClient>(opt_.graphiteHost, opt_.graphitePort);
+        graphite_ = std::make_shared<GraphiteClient>(opt_.graphiteHost, opt_.graphitePort);
         LOG_INFO("StatsCollector: Graphite enabled -> " << opt_.graphiteHost << ":"
                  << opt_.graphitePort << " under '" << opt_.prefix << "'");
     }
@@ -67,7 +67,7 @@ void StatsCollector::setGraphite(const std::string& host, int port, const std::s
         graphite_.reset();
         LOG_INFO("StatsCollector: Graphite disabled");
     } else {
-        graphite_ = std::make_unique<GraphiteClient>(host, port);
+        graphite_ = std::make_shared<GraphiteClient>(host, port);
         LOG_INFO("StatsCollector: Graphite target -> " << host << ":" << port
                  << " under '" << opt_.prefix << "'");
     }
@@ -142,11 +142,22 @@ void StatsCollector::loop() {
             latest_ = rates;
         }
 
+        // Take a reference to the sink and a copy of the prefix under the lock,
+        // then format and send with the lock RELEASED. graphiteMtx_ is also what
+        // setGraphite() needs, so holding it across a network write would make
+        // retargeting Graphite — and stop(), which joins this thread — wait on
+        // the socket. The client is a shared_ptr precisely so a concurrent
+        // setGraphite() can swap the pointer without destroying the object this
+        // thread is still writing to.
+        std::shared_ptr<GraphiteClient> sink;
+        std::string prefix;
         {
             std::lock_guard<std::mutex> lk(graphiteMtx_);
-            if (graphite_ && graphite_->enabled()) {
-                graphite_->send(formatGraphite(rates, static_cast<long long>(std::time(nullptr))));
-            }
+            sink   = graphite_;
+            prefix = opt_.prefix;
+        }
+        if (sink && sink->enabled()) {
+            sink->send(formatGraphite(rates, prefix, static_cast<long long>(std::time(nullptr))));
         }
 
         prev = std::move(cur);
@@ -160,13 +171,17 @@ void StatsCollector::loop() {
 // the board's configuration and two digitizers of the same model carry the same
 // one, which would silently merge their series. The prefix identifies the
 // EXPERIMENT ('ancillary.rates.12c12c'), so a campaign owns one subtree.
-std::string StatsCollector::formatGraphite(const std::vector<BoardRate>& rates, long long epoch) const {
+// The prefix is passed in rather than read from opt_: this runs without
+// graphiteMtx_ held, and setGraphite() may be changing opt_.prefix concurrently.
+std::string StatsCollector::formatGraphite(const std::vector<BoardRate>& rates,
+                                           const std::string& prefix,
+                                           long long epoch) const {
     std::ostringstream oss;
     for (const auto& b : rates) {
-        const std::string bo = opt_.prefix + ".bo_" + std::to_string(b.boardRegId);
+        const std::string bo = prefix + ".bo_" + std::to_string(b.boardRegId);
         oss << bo << ".writeRate " << b.writeRate << ' ' << epoch << '\n';
         for (const auto& c : b.channels) {
-            const std::string base = opt_.prefix +
+            const std::string base = prefix +
                                      ".bo_" + std::to_string(c.board) +
                                      ".ch_" + std::to_string(c.ch) + '.';
             oss << base << "totalRate " << c.events << ' ' << epoch << '\n';

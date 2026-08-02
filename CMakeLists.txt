@@ -410,4 +410,12 @@ if(CAENDAQ_BUILD_TESTS)
     add_executable(decode_test tests/decode_test.cpp)
     target_link_libraries(decode_test PRIVATE caendaq)
     add_test(NAME decode_test COMMAND decode_test)
+
+    # Asserts the Graphite push stays time-bounded when the Carbon server is
+    # unreachable. Capped well below the kernel SYN timeout it guards against,
+    # so a regression to blocking sockets fails here rather than on the DAQ.
+    add_executable(graphite_test tests/graphite_test.cpp)
+    target_link_libraries(graphite_test PRIVATE caendaq)
+    add_test(NAME graphite_test COMMAND graphite_test)
+    set_tests_properties(graphite_test PROPERTIES TIMEOUT 30)
 endif()
