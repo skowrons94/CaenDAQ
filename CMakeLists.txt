@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(CaenDAQ VERSION 0.1.0 LANGUAGES CXX)
+project(CaenDAQ VERSION 1.0.0 LANGUAGES CXX)
 
 # ---- Options ---------------------------------------------------------------
 # Tri-state, and AUTO by default: a machine with libCAENDigitizer installed gets
