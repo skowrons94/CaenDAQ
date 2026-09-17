@@ -150,6 +150,8 @@ private:
     // (board register id 0, else the first synchronised board), or -1 when no
     // board is configured for a synchronised start.
     int masterIndex() const;
+    // Software Clock Sync over boards sharing a daisy-chained clock (see ClockSync.hpp).
+    void alignClockChain();
     void writerLoop();          // single thread: drains writeQueue_ -> writer_
     void teardownWriter();      // close queue, join writer thread, close file
 

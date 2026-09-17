@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <stdexcept>
 
+#include "caendaq/ClockSync.hpp"
 #include "caendaq/Log.hpp"
 
 #ifdef CAENDAQ_WITH_CAEN
@@ -80,6 +81,26 @@ int Daq::masterIndex() const {
     return firstSynced;
 }
 
+void Daq::alignClockChain() {
+    std::vector<std::uint32_t> acq;
+    acq.reserve(runners_.size());
+    for (auto& r : runners_) acq.push_back(r->boardInfo().acquisitionControl);
+
+    const int master = masterIndex();
+    std::vector<ClockChainBoard> chain;
+    for (std::size_t i : clockChainOrder(acq, master)) {
+        BoardRunner* r = runners_[i].get();
+        ClockChainBoard b;
+        b.name   = r->name();
+        b.master = static_cast<int>(i) == master;
+        b.write  = [r](std::uint32_t a, std::uint32_t v) { return r->writeRegister(a, v); };
+        b.read   = [r](std::uint32_t a, std::uint32_t* v) { return r->readRegister(a, v); };
+        chain.push_back(std::move(b));
+    }
+    if (chain.size() < 2) return;   // nothing takes a clock from another board
+    synchroniseClockChain(chain);
+}
+
 bool Daq::prepare() {
     if (prepared_) return true;
     for (auto& r : runners_) {
@@ -118,6 +139,12 @@ bool Daq::prepare() {
 bool Daq::start() {
     if (running_) return true;
     if (!prepare()) return false;
+
+    // Every board is configured and none is armed: the moment the manual asks
+    // for Software Clock Sync on a daisy-chained clock. Loading the register
+    // dumps is what destabilises the chain, so aligning any earlier would be
+    // undone. Readers are not running yet, so nothing competes for the link.
+    alignClockChain();
 
     // Start the single writer thread first so it is ready to drain buffers.
     writerFailed_.store(false);

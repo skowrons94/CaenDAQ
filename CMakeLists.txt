@@ -253,6 +253,7 @@ set(CAENDAQ_SOURCES
     src/GraphiteClient.cpp
     src/StatsCollector.cpp
     src/Daq.cpp
+    src/ClockSync.cpp
     vendor/rureader/DataFrame.cc
     vendor/rureader/DataFrameBuilderPHA.cc
     vendor/rureader/DataFrameBuilderPSD.cc
@@ -425,4 +426,11 @@ if(CAENDAQ_BUILD_TESTS)
     target_link_libraries(stats_interval_test PRIVATE caendaq)
     add_test(NAME stats_interval_test COMMAND stats_interval_test)
     set_tests_properties(stats_interval_test PROPERTIES TIMEOUT 60)
+
+    # Asserts the daisy-chain clock alignment follows UM6769: re-align master
+    # first down to the last board, and report a board whose PLL is not locked.
+    add_executable(clock_sync_test tests/clock_sync_test.cpp)
+    target_link_libraries(clock_sync_test PRIVATE caendaq)
+    add_test(NAME clock_sync_test COMMAND clock_sync_test)
+    set_tests_properties(clock_sync_test PROPERTIES TIMEOUT 30)
 endif()
