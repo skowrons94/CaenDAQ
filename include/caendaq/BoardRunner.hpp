@@ -92,8 +92,9 @@ public:
         return dgtz_->readRegister(address, value);
     }
 
-    // Stop acquisition, join the reader, stop the decode tap. Idempotent. Does
-    // NOT touch the shared file writer — Daq owns that.
+    // Stop acquisition, join the reader, read out what the board still holds,
+    // stop the decode tap. Idempotent. Does NOT touch the shared file writer —
+    // Daq owns that (and closes it only after every board has stopped).
     void stop();
 
     // Board identity, valid after prepare(). Used to build the file header.
@@ -124,6 +125,10 @@ public:
 
 private:
     void readerLoop();
+    // One readout buffer to the file writer and the decode tap.
+    void dispatch(const char* data, std::size_t size);
+    // After the stop: read until the board is empty (bounded).
+    void drain();
 
     std::unique_ptr<IDigitizer> dgtz_;
     BoardRunnerConfig           cfg_;

@@ -71,9 +71,12 @@ void BoardRunner::stop() {
     // 2. Let the reader finish its current iteration and exit (it stops pushing
     //    to the shared write queue — Daq closes/joins that queue afterwards).
     if (readerThread_.joinable()) readerThread_.join();
-    // 3. Stop the decode tap (drains its own queue).
+    // 3. Read out what the board still holds: the events of the last moments
+    //    before the stop wait in its memory until the next readout.
+    drain();
+    // 4. Stop the decode tap (drains its own queue).
     if (decodeStage_) decodeStage_->stop();
-    // 4. Release the board.
+    // 5. Release the board.
     dgtz_->close();
 
     LOG_INFO(name() << ": run stopped — buffers=" << buffersRead_.load()
@@ -86,7 +89,6 @@ void BoardRunner::readerLoop() {
     try {
         const char* data = nullptr;
         std::size_t size = 0;
-        const bool writing = cfg_.write && writeQueue_ != nullptr;
         while (running_.load()) {
             if (writerFailed_ && writerFailed_->load()) {
                 LOG_ERROR(name() << ": shared writer failed, stopping reader");
@@ -109,26 +111,50 @@ void BoardRunner::readerLoop() {
                 continue;
             }
 
-            buffersRead_.fetch_add(1, std::memory_order_relaxed);
-            bytesRead_.fetch_add(size, std::memory_order_relaxed);
-
-            // One shared buffer fans out to the shared file writer (must not
-            // drop) and the optional decode tap (best-effort).
-            BlockPtr block = std::make_shared<const RawBlock>(data, size);
-            if (writing) {
-                if (writeQueue_->push(block)) {
-                    bytesWritten_.fetch_add(size, std::memory_order_relaxed);
-                } else {
-                    blocksDropped_.fetch_add(1, std::memory_order_relaxed);
-                }
-            }
-            if (decodeStage_) decodeStage_->submit(block);
+            dispatch(data, size);
         }
     } catch (const std::exception& e) {
         LOG_ERROR(name() << ": reader thread exception: " << e.what());
     } catch (...) {
         LOG_ERROR(name() << ": reader thread unknown exception");
     }
+}
+
+void BoardRunner::dispatch(const char* data, std::size_t size) {
+    buffersRead_.fetch_add(1, std::memory_order_relaxed);
+    bytesRead_.fetch_add(size, std::memory_order_relaxed);
+
+    // One shared buffer fans out to the shared file writer (must not drop) and
+    // the optional decode tap (best-effort).
+    BlockPtr block = std::make_shared<const RawBlock>(data, size);
+    if (cfg_.write && writeQueue_ != nullptr) {
+        if (writeQueue_->push(block)) {
+            bytesWritten_.fetch_add(size, std::memory_order_relaxed);
+        } else {
+            blocksDropped_.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+    if (decodeStage_) decodeStage_->submit(block);
+}
+
+void BoardRunner::drain() {
+    // A board holds at most its memory's worth of aggregates; a couple of
+    // seconds of reads is ample, and keeps a wedged board from hanging the stop.
+    constexpr int  kMaxReads = 1000;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    std::uint64_t bytes = 0;
+    try {
+        for (int i = 0; i < kMaxReads && std::chrono::steady_clock::now() < deadline; ++i) {
+            const char* data = nullptr;
+            std::size_t size = 0;
+            if (!dgtz_->read(&data, &size) || size == 0) break;
+            dispatch(data, size);
+            bytes += size;
+        }
+    } catch (const std::exception& e) {
+        LOG_WARN(name() << ": readout after the stop failed: " << e.what());
+    }
+    if (bytes) LOG_INFO(name() << ": read " << bytes << " bytes left in the board after the stop");
 }
 
 } // namespace caendaq
