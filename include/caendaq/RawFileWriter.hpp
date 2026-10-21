@@ -50,6 +50,10 @@ public:
     bool write(const char* data, std::size_t len);
 
     // Write the trailer (if header was written) and close. Safe to call twice.
+    // Hand what is buffered to the operating system. Not an fsync: it protects
+    // the data from the process dying (a crash, a kill), not from a power cut.
+    bool flush();
+
     void close();
 
     std::uint64_t bytesWritten() const { return totalBytes_; }

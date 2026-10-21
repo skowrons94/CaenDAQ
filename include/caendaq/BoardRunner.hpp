@@ -116,6 +116,9 @@ public:
     std::uint64_t eventsDecoded()  const { return decodeStage_ ? decodeStage_->eventsDecoded() : 0; }
     std::uint64_t decodeDropped()  const { return decodeStage_ ? decodeStage_->blocksDropped() : 0; }
     std::uint64_t boardFailures()  const { return decodeStage_ ? decodeStage_->boardFailures() : 0; }
+    std::uint64_t incompleteEvents() const { return decodeStage_ ? decodeStage_->incompleteEvents() : 0; }
+    // Hits for the coincidence builder (off until enabled; see HitTap).
+    HitTap&               hits()             { return hits_; }
     HistogramStore&       histograms()       { return histograms_; }
     const HistogramStore& histograms() const { return histograms_; }
 
@@ -128,6 +131,7 @@ private:
     std::atomic<bool>*          writerFailed_ = nullptr; // shared, owned by Daq
     BoardInfo                   boardInfo_;
     HistogramStore              histograms_;
+    HitTap                      hits_;
     std::unique_ptr<DecodeStage> decodeStage_;
 
     std::thread        readerThread_;

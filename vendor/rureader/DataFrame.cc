@@ -134,6 +134,12 @@ void DataFrame::ResolveLayout( )
     l.resEnergy = 0xF3000000;
   }
 
+  // A board whose Board Configuration lacks time stamp / energy recording
+  // (0x8000 bits 18/19, "must be 1") sends events made of the trace alone.
+  l.hasTS     = Enabled( "TS" );
+  l.hasEnergy = Enabled( "Energy" );
+  l.hasCharge = Enabled( "Charge" );
+
   // Event size, in 32 bit words.
   uint16_t size = 0;
   if( Enabled( "Energy" ) ) size += 1;

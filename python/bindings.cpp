@@ -16,6 +16,7 @@
 
 #include <cstring>
 
+#include "caendaq/AggregateDecoder.hpp"
 #include "caendaq/Daq.hpp"
 
 namespace py = pybind11;
@@ -77,6 +78,20 @@ PYBIND11_MODULE(caendaq, m) {
     m.attr("PSD_XBINS") = static_cast<int>(HistogramStore::kPsdXBins);
     m.attr("PSD_YBINS") = static_cast<int>(HistogramStore::kPsdYBins);
     m.attr("QLONG_MAX") = static_cast<int>(HistogramStore::kQLongMax);
+    // Time-between-hits histogram: INTERVAL_BINS log bins from 1 ns, so bin i
+    // starts at 10**(i / INTERVAL_BINS_PER_DECADE) ns.
+    m.attr("INTERVAL_BINS") = static_cast<int>(HistogramStore::kIntervalBins);
+    m.attr("INTERVAL_BINS_PER_DECADE") = static_cast<int>(HistogramStore::kIntervalBinsPerDecade);
+    // numpy dtype of the records take_hits() returns (mirrors caendaq::Hit).
+    {
+        py::list fields;
+        fields.append(py::make_tuple("time_ps", "<i8"));
+        fields.append(py::make_tuple("energy", "<u2"));
+        fields.append(py::make_tuple("channel", "u1"));
+        fields.append(py::make_tuple("flags", "u1"));
+        fields.append(py::make_tuple("reserved", "<u4"));
+        m.attr("HIT_DTYPE") = py::module_::import("numpy").attr("dtype")(fields);
+    }
 
     m.def("board_fail_meaning", []() {
         return std::string(
@@ -243,6 +258,8 @@ PYBIND11_MODULE(caendaq, m) {
             o["start_mode"]            = bi.acquisitionControl & 0x3u;
             o["start_mode_name"]       = startModeName(bi.acquisitionControl & 0x3u);
             o["sync_role"]             = std::string(toString(bi.syncRole));
+            // Period of the time-stamp counter, what timestamps are counted in.
+            o["ps_per_tick"]    = AggregateDecoder::timeStampPs(bi);
             o["conn_type"]      = bi.connType;
             o["link_num"]       = bi.linkNum;
             o["node"]           = bi.node;
@@ -269,6 +286,48 @@ PYBIND11_MODULE(caendaq, m) {
                  return a;
              }, py::arg("board"), py::arg("channel"),
              "2D DPP-PSD histogram (uint32, shape [PSD_XBINS, PSD_YBINS]); empty until a PSD event.")
+        .def("interval", [](Daq& d, int b, int ch) { return toArray(d.histograms(b).interval(b, ch)); },
+             py::arg("board"), py::arg("channel"),
+             "Time between consecutive hits of a channel: INTERVAL_BINS log bins "
+             "from 1 ns to 10 s (uint32). Empty until two timed hits are seen.")
+
+        // ── Hits for online coincidences ───────────────────────────────────
+        .def("enable_hits",
+             [](Daq& d, int b, bool on, std::size_t capacity) {
+                 HitTap& t = d.hits(b);
+                 if (capacity) t.setCapacity(capacity);
+                 t.setEnabled(on);
+             },
+             py::arg("board"), py::arg("on") = true, py::arg("capacity") = 0,
+             "Start (or stop) keeping this board's hits for take_hits(). At most "
+             "`capacity` hits are held between takes (0 keeps the default, about "
+             "a million = 16 MB); beyond that new hits are dropped and counted.")
+        .def("take_hits",
+             [](Daq& d, int b) {
+                 std::vector<Hit> v;
+                 {
+                     py::gil_scoped_release release;
+                     v = d.hits(b).take();
+                 }
+                 py::module_ m = py::module_::import("caendaq");
+                 py::array a(py::dtype(m.attr("HIT_DTYPE")), static_cast<py::ssize_t>(v.size()));
+                 if (!v.empty()) std::memcpy(a.mutable_data(), v.data(), v.size() * sizeof(Hit));
+                 return a;
+             },
+             py::arg("board"),
+             "Every hit of the board since the last call, as a HIT_DTYPE array in "
+             "decode order (time-ordered per channel, not across channels).")
+        .def("hits_dropped", [](Daq& d, int b) { return d.hits(b).dropped(); }, py::arg("board"),
+             "Hits not kept because take_hits() was not called often enough.")
+        .def("decode_dropped", &Daq::decodeDropped, py::arg("board"),
+             "Raw blocks the online decoder skipped while behind: missing from the "
+             "spectra and hits, present in the file.")
+
+        .def("incomplete_events", &Daq::incompleteEvents, py::arg("board"),
+             "Events the board sent without a time stamp or an energy/charge word: "
+             "Board Configuration (0x8000) has time stamp or energy recording "
+             "(bits 18/19, which the manual says must be 1) switched off. Their "
+             "energy and time are 0, not decoded from other words.")
         .def("waveform",[](Daq& d, int b, int ch) { return toArray(d.histograms(b).waveform(b, ch)); },
              py::arg("board"), py::arg("channel"), "Latest waveform (int16 samples).")
         .def("waveform_of",

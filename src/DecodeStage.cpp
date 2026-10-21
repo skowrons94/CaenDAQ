@@ -6,8 +6,9 @@
 
 namespace caendaq {
 
-DecodeStage::DecodeStage(const BoardInfo& info, HistogramStore& store, std::size_t queueCapacity)
-    : store_(store), queue_(queueCapacity) {
+DecodeStage::DecodeStage(const BoardInfo& info, HistogramStore& store, HitTap& hits,
+                         std::size_t queueCapacity)
+    : store_(store), hits_(hits), queue_(queueCapacity) {
     decoder_.registerBoard(info);
 }
 
@@ -33,10 +34,16 @@ void DecodeStage::loop() {
         while (auto block = queue_.pop()) {
             const BlockPtr& b = *block;
             if (!b) continue;
+            const bool tapping = hits_.enabled();
+            batch_.clear();
             const std::size_t n =
-                decoder_.decode(b->data(), b->size(), [this](const DecodedEvent& e) {
+                decoder_.decode(b->data(), b->size(), [this, tapping](const DecodedEvent& e) {
                     store_.fill(e);
+                    // A hit without a time (no time stamp recorded, or a
+                    // board whose clock is unknown) cannot be in coincidence.
+                    if (tapping && e.timePs > 0) batch_.push_back(HitTap::fromEvent(e));
                 });
+            if (tapping) hits_.append(batch_);
             events_.fetch_add(n, std::memory_order_relaxed);
         }
     } catch (const std::exception& e) {

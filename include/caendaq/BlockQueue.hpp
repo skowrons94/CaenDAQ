@@ -60,6 +60,18 @@ public:
         return b;
     }
 
+    // As pop(), but gives up after `wait`: the writer uses it to flush the file
+    // when data stops arriving. `timedOut` tells a timeout from closed-and-drained.
+    std::optional<BlockPtr> popFor(std::chrono::milliseconds wait, bool& timedOut) {
+        std::unique_lock<std::mutex> lk(mtx_);
+        timedOut = !not_empty_.wait_for(lk, wait, [&] { return closed_ || !q_.empty(); });
+        if (q_.empty()) return std::nullopt;
+        BlockPtr b = std::move(q_.front());
+        q_.pop_front();
+        not_full_.notify_one();
+        return b;
+    }
+
     // Signal shutdown: no more pushes accepted; pop() drains then returns nullopt.
     void close() {
         {

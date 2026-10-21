@@ -1,6 +1,7 @@
 #include "caendaq/Daq.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <stdexcept>
 
 #include "caendaq/ClockSync.hpp"
@@ -239,14 +240,30 @@ BoardInfo Daq::boardInfo(int board) const {
 }
 
 void Daq::writerLoop() {
+    // The file is flushed at least once a second, and as soon as data stops
+    // arriving. Left to std::ofstream alone, what a crash or a kill cost was
+    // whatever the stream buffer held — at a low rate, many seconds of data.
+    using clock = std::chrono::steady_clock;
+    constexpr auto kFlushEvery = std::chrono::seconds(1);
+    auto lastFlush = clock::now();
+    bool dirty = false;
     try {
-        while (auto block = writeQueue_.pop()) {
-            const BlockPtr& b = *block;
-            if (!b) continue;
-            if (writer_ && !writer_->write(b->data(), b->size())) {
-                LOG_ERROR("Daq: file write failed — stopping writer");
-                writerFailed_.store(true);
-                break;
+        for (;;) {
+            bool timedOut = false;
+            auto block = writeQueue_.popFor(std::chrono::milliseconds(200), timedOut);
+            if (!block && !timedOut) break;            // closed and drained
+            if (block && *block) {
+                if (writer_ && !writer_->write((*block)->data(), (*block)->size())) {
+                    LOG_ERROR("Daq: file write failed — stopping writer");
+                    writerFailed_.store(true);
+                    break;
+                }
+                dirty = true;
+            }
+            if (dirty && writer_ && (timedOut || clock::now() - lastFlush >= kFlushEvery)) {
+                writer_->flush();
+                lastFlush = clock::now();
+                dirty = false;
             }
         }
     } catch (const std::exception& e) {
@@ -330,6 +347,18 @@ bool Daq::readRegister(int board, std::uint32_t address, std::uint32_t* value) {
 
 const std::string& Daq::boardName(int board) const {
     return names_.at(static_cast<std::size_t>(board));
+}
+
+HitTap& Daq::hits(int board) {
+    return runners_.at(static_cast<std::size_t>(board))->hits();
+}
+
+std::uint64_t Daq::decodeDropped(int board) const {
+    return runners_.at(static_cast<std::size_t>(board))->decodeDropped();
+}
+
+std::uint64_t Daq::incompleteEvents(int board) const {
+    return runners_.at(static_cast<std::size_t>(board))->incompleteEvents();
 }
 
 HistogramStore& Daq::histograms(int board) {

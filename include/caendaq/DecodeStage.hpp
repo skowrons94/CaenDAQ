@@ -16,13 +16,15 @@
 #include "caendaq/BlockQueue.hpp"
 #include "caendaq/BoardInfo.hpp"
 #include "caendaq/HistogramStore.hpp"
+#include "caendaq/HitTap.hpp"
 #include "caendaq/RawBlock.hpp"
 
 namespace caendaq {
 
 class DecodeStage {
 public:
-    DecodeStage(const BoardInfo& info, HistogramStore& store, std::size_t queueCapacity = 1024);
+    DecodeStage(const BoardInfo& info, HistogramStore& store, HitTap& hits,
+                std::size_t queueCapacity = 1024);
 
     void start();
     // Best-effort: drops (counted) if the decode queue is full, never blocks.
@@ -33,12 +35,15 @@ public:
     std::uint64_t blocksDropped() const { return queue_.dropped(); }
     std::uint64_t corruptAggregates() const { return decoder_.corruptCount(); }
     std::uint64_t boardFailures() const { return decoder_.boardFailCount(); }
+    std::uint64_t incompleteEvents() const { return decoder_.incompleteCount(); }
 
 private:
     void loop();
 
     AggregateDecoder decoder_;
     HistogramStore&  store_;
+    HitTap&          hits_;
+    std::vector<Hit> batch_;   // this block's hits, handed to hits_ in one go
     BlockQueue       queue_;
     std::thread      thread_;
     std::atomic<bool>          running_{false};

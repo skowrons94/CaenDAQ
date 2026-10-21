@@ -1,5 +1,7 @@
 #include "caendaq/HistogramStore.hpp"
 
+#include <cmath>
+
 namespace caendaq {
 
 void HistogramStore::fill(const DecodedEvent& e) {
@@ -28,6 +30,19 @@ void HistogramStore::fill(const DecodedEvent& e) {
             if (yb >= kPsdYBins) yb = kPsdYBins - 1;
             ++c.psd[xb * kPsdYBins + yb];
         }
+    }
+    if (e.timePs > 0) {
+        // Channels are read out in time order, so this is the previous hit; a
+        // rare straggler (dt <= 0) is skipped rather than allowed to move time back.
+        if (c.lastTimePs >= 0 && e.timePs > c.lastTimePs) {
+            const double ns = static_cast<double>(e.timePs - c.lastTimePs) * 1e-3;
+            long bin = static_cast<long>(std::floor(std::log10(ns) * kIntervalBinsPerDecade));
+            if (bin < 0) bin = 0;
+            if (bin >= static_cast<long>(kIntervalBins)) bin = kIntervalBins - 1;
+            if (c.interval.empty()) c.interval.assign(kIntervalBins, 0);
+            ++c.interval[static_cast<std::size_t>(bin)];
+        }
+        if (e.timePs > c.lastTimePs) c.lastTimePs = e.timePs;
     }
     if (e.wave.samples && e.wave.length) {
         c.lastWave.assign(e.wave.samples, e.wave.samples + e.wave.length);
@@ -70,6 +85,12 @@ std::vector<std::uint32_t> HistogramStore::psd(std::uint16_t board, std::uint16_
     std::lock_guard<std::mutex> lk(mtx_);
     const Channel* c = find(board, ch);
     return c ? c->psd : std::vector<std::uint32_t>{};
+}
+
+std::vector<std::uint32_t> HistogramStore::interval(std::uint16_t board, std::uint16_t ch) const {
+    std::lock_guard<std::mutex> lk(mtx_);
+    const Channel* c = find(board, ch);
+    return c ? c->interval : std::vector<std::uint32_t>{};
 }
 
 std::vector<std::int16_t> HistogramStore::waveform(std::uint16_t board, std::uint16_t ch) const {

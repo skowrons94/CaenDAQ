@@ -30,9 +30,50 @@ CAEN_DGTZ_DPPFirmware_t toCaenDpp(DppType t) {
 }
 } // namespace
 
+std::uint32_t AggregateDecoder::timeStampPs(const BoardInfo& bi) {
+    if (bi.nsPerSample) return 1000u * bi.nsPerSample;
+    const std::string& n = bi.modelName;
+    if (n.find("724") != std::string::npos || n.find("781") != std::string::npos ||
+        n.find("782") != std::string::npos) return 10000;
+    if (n.find("725") != std::string::npos || n.find("720") != std::string::npos) return 4000;
+    if (n.find("730") != std::string::npos) return 2000;
+    return 0;
+}
+
+std::uint64_t AggregateDecoder::unwrap(ChannelClock& c, std::uint64_t raw, int width) {
+    const std::uint64_t range = (width >= 64) ? 0 : (1ull << width);
+    std::uint64_t full = raw;
+    if (range != 0) {
+        const std::uint64_t lowest = c.epoch > 0 ? c.epoch - 1 : 0;
+        std::uint64_t best = c.epoch, bestDist = UINT64_MAX;
+        for (std::uint64_t cand = lowest; cand <= c.epoch + 1 && c.seen; ++cand) {
+            const std::uint64_t f = raw + cand * range;
+            const std::uint64_t d = f > c.reference ? f - c.reference : c.reference - f;
+            if (d < bestDist) { bestDist = d; best = cand; }
+        }
+        if (best > c.epoch) c.epoch = best;
+        full = raw + best * range;
+    }
+    c.seen = true;
+    if (full > c.reference) c.reference = full;
+    return full;
+}
+
+void AggregateDecoder::setTime(DecodedEvent& e, std::uint32_t board, int width,
+                               std::uint32_t fineTS, int fineBits) {
+    BoardDec& bd = boards_[board];
+    const std::uint64_t ticks = unwrap(bd.clock, e.timestamp, width);
+    if (!bd.psPerTick) return;
+    std::int64_t ps = static_cast<std::int64_t>(ticks * bd.psPerTick);
+    if (fineBits > 0)
+        ps += static_cast<std::int64_t>((static_cast<std::uint64_t>(fineTS) * bd.psPerTick) >> fineBits);
+    e.timePs = ps;
+}
+
 void AggregateDecoder::registerBoard(std::uint32_t boardRegId, DppType dpp,
-                                     const std::string& modelName) {
+                                     const std::string& modelName, std::uint32_t psPerTick) {
     BoardDec bd;
+    bd.psPerTick = psPerTick;
     bd.isPHA = (dpp != DppType::PSD);
     bd.frame = DataFrame(toCaenDpp(dpp), modelName);
     bd.frame.Build();
@@ -72,7 +113,7 @@ std::size_t AggregateDecoder::decode(const char* data, std::size_t nbytes,
 }
 
 std::uint32_t AggregateDecoder::unpackWave(const std::uint32_t* buf,
-                                           const DataLayout& layout, std::uint32_t ev) {
+                                           const DataLayout& layout, std::uint32_t first) {
     const int nWords = layout.numSamples / 2; // two samples per 32-bit word
     if (nWords <= 0) return 0;
 
@@ -82,12 +123,12 @@ std::uint32_t AggregateDecoder::unpackWave(const std::uint32_t* buf,
     if (layout.dualTrace) {
         wave_.resize(static_cast<std::size_t>(nWords));
         for (int i = 0; i < nWords; ++i)
-            wave_[i] = static_cast<std::int16_t>(ExtractBits(buf[ev + 1 + i], lo, hi));
+            wave_[i] = static_cast<std::int16_t>(ExtractBits(buf[first + i], lo, hi));
         return static_cast<std::uint32_t>(nWords);
     }
     wave_.resize(static_cast<std::size_t>(2 * nWords));
     for (int i = 0; i < nWords; ++i) {
-        const std::uint32_t w = buf[ev + 1 + i];
+        const std::uint32_t w = buf[first + i];
         wave_[2 * i]     = static_cast<std::int16_t>(ExtractBits(w, lo,      hi));
         wave_[2 * i + 1] = static_cast<std::int16_t>(ExtractBits(w, lo + 16, hi + 16));
     }
@@ -140,8 +181,12 @@ void AggregateDecoder::decodePHA(const std::uint32_t* buf, std::uint32_t board,
 
         for (std::uint32_t evt = 0; evt < nEvents; ++evt) {
             const std::uint32_t ev = base + evt * layout.evtSize;
-            const std::uint32_t timeWord   = buf[ev];
-            const std::uint32_t energyWord = buf[ev + layout.evtSize - 1];
+            // A board not recording time stamps or energies (Board Configuration
+            // bits 18/19 off) sends the trace alone: no word may be read as one.
+            const std::uint32_t timeWord   = layout.hasTS ? buf[ev] : 0;
+            const std::uint32_t energyWord = layout.hasEnergy ? buf[ev + layout.evtSize - 1] : 0;
+            const std::uint32_t lastWords  = layout.hasEnergy ? 1 : 0;   // words after the extras
+            if (!layout.hasTS || !layout.hasEnergy) ++incomplete_;
 
             const std::uint64_t rawTS = ExtractBits(timeWord, layout.fmtTS);
 
@@ -150,9 +195,11 @@ void AggregateDecoder::decodePHA(const std::uint32_t* buf, std::uint32_t board,
             if (channel >= kMaxChannels) continue;
 
             std::uint32_t extendedTS = 0; int extendedBits = 0;
+            std::uint32_t fineTS = 0; int fineBits = 0;
             if (layout.hasExtras) {
-                const std::uint32_t extras2 = buf[ev + layout.evtSize - 2];
+                const std::uint32_t extras2 = buf[ev + layout.evtSize - 1 - lastWords];
                 if (layout.extrasMode <= 2) { extendedTS = extras2 >> 16; extendedBits = 16; }
+                if (layout.extrasMode == 2) { fineTS = extras2 & 0x3FF; fineBits = 10; }
             }
 
             // Quality flags from the PHA extras field of the energy word.
@@ -167,7 +214,8 @@ void AggregateDecoder::decodePHA(const std::uint32_t* buf, std::uint32_t board,
             e.lost      = (flags & kPhaLostBit) != 0;
             e.timestamp = extendedBits ? ((static_cast<std::uint64_t>(extendedTS) << layout.tsBits) | rawTS)
                                        : rawTS;
-            if (layout.hasTrace) { std::uint32_t n = unpackWave(buf, layout, ev); e.wave = {wave_.data(), n}; }
+            if (layout.hasTS) setTime(e, board, layout.tsBits + extendedBits, fineTS, fineBits);
+            if (layout.hasTrace) { std::uint32_t n = unpackWave(buf, layout, ev + (layout.hasTS ? 1 : 0)); e.wave = {wave_.data(), n}; }
             fn(e);
         }
         pos += coupleSize;
@@ -199,8 +247,10 @@ void AggregateDecoder::decodePSD(const std::uint32_t* buf, std::uint32_t board,
 
         for (std::uint32_t evt = 0; evt < nEvents; ++evt) {
             const std::uint32_t ev = base + evt * layout.evtSize;
-            const std::uint32_t timeWord   = buf[ev];
-            const std::uint32_t chargeWord = buf[ev + layout.evtSize - 1];
+            const std::uint32_t timeWord   = layout.hasTS ? buf[ev] : 0;
+            const std::uint32_t chargeWord = layout.hasCharge ? buf[ev + layout.evtSize - 1] : 0;
+            const std::uint32_t lastWords  = layout.hasCharge ? 1 : 0;
+            if (!layout.hasTS || !layout.hasCharge) ++incomplete_;
 
             const std::uint64_t rawTS = ExtractBits(timeWord, layout.fmtTS);
 
@@ -209,11 +259,13 @@ void AggregateDecoder::decodePSD(const std::uint32_t* buf, std::uint32_t board,
             if (channel >= kMaxChannels) continue;
 
             std::uint32_t extendedTS = 0; int extendedBits = 0;
+            std::uint32_t fineTS = 0; int fineBits = 0;
             bool satu = false, lost = false;
             if (layout.hasExtras) {
-                const std::uint32_t extras2 = buf[ev + layout.evtSize - 2];
+                const std::uint32_t extras2 = buf[ev + layout.evtSize - 1 - lastWords];
                 if (layout.extrasConfig) {
                     if (layout.extrasMode <= 2) { extendedTS = extras2 >> 16; extendedBits = 16; }
+                    if (layout.extrasMode == 2) { fineTS = extras2 & 0x3FF; fineBits = 10; }
                     if (layout.extrasMode == 1) {
                         satu = (extras2 & kPsdOverBit) != 0;
                         lost = (extras2 & kPsdLostBit) != 0;
@@ -233,7 +285,8 @@ void AggregateDecoder::decodePSD(const std::uint32_t* buf, std::uint32_t board,
             e.lost      = lost;
             e.timestamp = extendedBits ? ((static_cast<std::uint64_t>(extendedTS) << layout.tsBits) | rawTS)
                                        : rawTS;
-            if (layout.hasTrace) { std::uint32_t n = unpackWave(buf, layout, ev); e.wave = {wave_.data(), n}; }
+            if (layout.hasTS) setTime(e, board, layout.tsBits + extendedBits, fineTS, fineBits);
+            if (layout.hasTrace) { std::uint32_t n = unpackWave(buf, layout, ev + (layout.hasTS ? 1 : 0)); e.wave = {wave_.data(), n}; }
             fn(e);
         }
         pos += coupleSize;

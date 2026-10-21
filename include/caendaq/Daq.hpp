@@ -97,6 +97,13 @@ public:
     // Per-board access. `board` is the add order index.
     const std::string& boardName(int board) const;
     HistogramStore&    histograms(int board);
+    // Hits for an online coincidence builder (off until enabled, see HitTap).
+    HitTap&            hits(int board);
+    // Raw blocks the decode tap skipped because it was behind. Their hits are
+    // missing from the spectra and from hits() alike; the file has them.
+    std::uint64_t      decodeDropped(int board) const;
+    // Events sent without a time stamp or energy word (see AggregateDecoder::incompleteCount).
+    std::uint64_t      incompleteEvents(int board) const;
     // Board identity + firmware + the acquisition registers as actually read
     // back from the board. Valid after prepare(); this is what run metadata
     // should record. Throws nothing; returns a default BoardInfo if out of range.

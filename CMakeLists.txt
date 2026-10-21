@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(CaenDAQ VERSION 1.0.0 LANGUAGES CXX)
+project(CaenDAQ VERSION 1.1.0 LANGUAGES CXX)
 
 # ---- Options ---------------------------------------------------------------
 # Tri-state, and AUTO by default: a machine with libCAENDigitizer installed gets
@@ -411,6 +411,12 @@ if(CAENDAQ_BUILD_TESTS)
     add_executable(decode_test tests/decode_test.cpp)
     target_link_libraries(decode_test PRIVATE caendaq)
     add_test(NAME decode_test COMMAND decode_test)
+
+    # Asserts hit times in ps (fine time stamp included), a counter wrap with
+    # an out-of-order event, the time-between-hits histogram and the hit tap.
+    add_executable(time_test tests/time_test.cpp)
+    target_link_libraries(time_test PRIVATE caendaq)
+    add_test(NAME time_test COMMAND time_test)
 
     # Asserts the Graphite push stays time-bounded when the Carbon server is
     # unreachable. Capped well below the kernel SYN timeout it guards against,

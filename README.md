@@ -123,6 +123,42 @@ plain integer arrays, with thread-safe snapshots — no ROOT on the C++ side.
 Run the tests: `cd build && ctest` (a crafted V1730 PSD aggregate is decoded and
 checked field-by-field).
 
+### Hit times
+
+Every decoded event carries `timePs`: the trigger time on the board's clock in
+picoseconds, the counter unwrapped per channel (each event goes in the epoch
+nearest to where its channel already is, so an event arriving out of order is
+never taken for a wrap) and the fine time stamp added when the board records it
+(Extras option 2). The tick is the sampling clock (`nsPerSample`, e.g. 4 ns on a
+V1725), not the "ns per time tag" the CAEN library reports, which a V1725 DPP-PHA
+gives as 16 ns. `board_info()["ps_per_tick"]` says which tick was used.
+
+A board whose Board Configuration (0x8000) has time stamp or energy recording
+switched off (bits 18/19, "must be 1") sends the trace alone. Such events keep
+their waveform but get no time and no energy, rather than a stray sample read in
+their place; `incomplete_events(board)` counts them.
+
+From the hit times, `interval(board, ch)` is the time between consecutive hits of
+a channel: 1000 log bins from 1 ns to 10 s (`INTERVAL_BINS`,
+`INTERVAL_BINS_PER_DECADE`). Dead time, double triggering and pulser lines show
+up there at a glance.
+
+### Hits for online coincidences
+
+`enable_hits(board)` makes the decoder keep a 16-byte record per hit
+(`HIT_DTYPE`: `time_ps`, `energy` (PHA energy or PSD qlong), `channel`, `flags`
+(bit 0 pile-up, bit 1 saturated, bit 2 lost)); `take_hits(board)` returns
+everything since the previous call as a numpy array. It is off by default and
+bounded (about a million hits between two takes, ~16 MB; beyond that hits are
+dropped and counted by `hits_dropped`). Hits the decode tap skipped while behind
+are counted by `decode_dropped`. WebDAQ builds its coincidences from these.
+
+### Data on disk
+
+The writer flushes the file to the operating system at least once a second and
+whenever data stops arriving, so a crash or a kill of the process loses at most
+the last second of data (a power cut can still lose what the OS had not written).
+
 ## Statistics & Graphite
 
 Whenever decode is on, a `StatsCollector` thread samples the per-channel counters

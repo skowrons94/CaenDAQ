@@ -110,6 +110,12 @@ bool RawFileWriter::write(const char* data, std::size_t len) {
     return true;
 }
 
+bool RawFileWriter::flush() {
+    if (closed_ || !file_.is_open()) return true;
+    file_.flush();
+    return static_cast<bool>(file_);
+}
+
 void RawFileWriter::close() {
     if (closed_) return;
     if (file_.is_open()) {

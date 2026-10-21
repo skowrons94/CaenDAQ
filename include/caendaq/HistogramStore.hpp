@@ -26,6 +26,14 @@ public:
     static constexpr std::size_t kPsdXBins   = 2048;
     static constexpr std::size_t kPsdYBins   = 256;
     static constexpr std::uint32_t kQLongMax = 65536; // x-axis range
+    // Time between consecutive hits of a channel, on a log axis: kIntervalBins
+    // bins from 1 ns to 10 s, kIntervalBinsPerDecade per decade. A random source
+    // gives one smooth bump at 1/rate; dead time is the cut at its left edge,
+    // double triggering or ringing a spike at small intervals, a pulser or
+    // periodic noise a sharp line.
+    static constexpr std::size_t kIntervalBinsPerDecade = 100;
+    static constexpr std::size_t kIntervalDecades       = 10;
+    static constexpr std::size_t kIntervalBins = kIntervalBinsPerDecade * kIntervalDecades;
 
     // Cumulative per-channel counters, for rate computation downstream.
     struct Counts {
@@ -44,6 +52,9 @@ public:
     // Flattened 2D PSD histogram (row-major, kPsdXBins rows × kPsdYBins cols).
     // Empty until the channel receives a PSD event.
     std::vector<std::uint32_t> psd(std::uint16_t board, std::uint16_t ch) const;
+    // Time between consecutive hits (see kIntervalBins). Empty until two hits
+    // with a known time have been seen.
+    std::vector<std::uint32_t> interval(std::uint16_t board, std::uint16_t ch) const;
     std::vector<std::int16_t>  waveform(std::uint16_t board, std::uint16_t ch) const;
     // Latest waveform of one kind of event, so a viewer can show a pile-up
     // trace, or a clean one, rather than whichever came last.
@@ -63,6 +74,8 @@ private:
         std::vector<std::uint32_t> qshort;
         std::vector<std::uint32_t> qlong;
         std::vector<std::uint32_t> psd;      // flattened kPsdXBins × kPsdYBins
+        std::vector<std::uint32_t> interval; // kIntervalBins, log axis
+        std::int64_t               lastTimePs = -1;
         std::vector<std::int16_t>  lastWave;
         std::vector<std::int16_t>  lastWaveGood;    // neither pile-up nor saturated
         std::vector<std::int16_t>  lastWavePileup;

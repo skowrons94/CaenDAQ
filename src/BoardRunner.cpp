@@ -22,7 +22,7 @@ bool BoardRunner::prepare() {
     boardInfo_ = dgtz_->info();
 
     if (cfg_.decode) {
-        decodeStage_ = std::make_unique<DecodeStage>(boardInfo_, histograms_, cfg_.decodeQueueCapacity);
+        decodeStage_ = std::make_unique<DecodeStage>(boardInfo_, histograms_, hits_, cfg_.decodeQueueCapacity);
         LOG_INFO(name() << ": parallel decode enabled");
     }
     if (!cfg_.write || writeQueue_ == nullptr) {

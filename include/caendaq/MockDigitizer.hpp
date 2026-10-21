@@ -76,6 +76,7 @@ private:
     std::uint32_t     lfsr_ = 0x1234567u;      // deterministic pseudo-random state
     std::uint64_t     counter_ = 0;            // fabricated aggregate counter
     std::chrono::steady_clock::time_point nextEmit_{};
+    std::chrono::steady_clock::time_point started_{};   // time stamps count from here
 
     std::uint32_t nextRand();
 };

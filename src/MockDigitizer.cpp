@@ -75,6 +75,7 @@ bool MockDigitizer::start() {
     running_ = true;
     counter_ = 0;
     nextEmit_ = std::chrono::steady_clock::now();
+    started_  = nextEmit_;
     LOG_INFO("MockDigitizer[" << params_.name << "]: start");
     return true;
 }
@@ -129,9 +130,24 @@ bool MockDigitizer::read(const char** data, std::size_t* size) {
     if (trace) fmt |= (1u << 27) | ((nSamp / 8u) & 0xFFFFu); // NumSamples cfg = samples/8
     w[k++] = fmt;
 
+    // Time stamps follow the wall clock, as a board's do (in nsPerSample ticks;
+    // the 31-bit counter wraps every few seconds, as on a board without the
+    // extended time stamp). The aggregate covers the period just emitted:
+    // channel 0 fires at even spacing, channel 1 between those, and one channel-1
+    // hit in three comes 10 ticks after its channel-0 partner — a coincidence.
+    const std::uint64_t tickNs   = info_.nsPerSample ? info_.nsPerSample : 1;
+    const std::uint64_t nowTicks = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(nextEmit_ - started_).count()) / tickNs;
+    const std::uint64_t spanTicks = static_cast<std::uint64_t>(period.count()) / tickNs;
+    const std::uint64_t pairs     = (nEvents + 1) / 2;
+    const std::uint64_t pairStep  = spanTicks / pairs ? spanTicks / pairs : 1;
+    const std::uint64_t base      = nowTicks > spanTicks ? nowTicks - spanTicks : 0;
+
     for (std::uint32_t e = 0; e < nEvents; ++e) {
         const std::uint32_t chBit = e & 1u;          // alternate channel 0/1
-        const std::uint32_t ts    = static_cast<std::uint32_t>(counter_ * 1000 + e) & 0x7FFFFFFFu;
+        std::uint64_t t = base + (e / 2) * pairStep;
+        if (chBit) t += (nextRand() % 3u == 0u) ? 10u : 1u + nextRand() % (pairStep / 2 + 1);
+        const std::uint32_t ts = static_cast<std::uint32_t>(t & 0x7FFFFFFFu);
         w[k++] = (chBit << 31) | (ts & 0x7FFFFFFFu);              // time word (+CH bit)
 
         if (trace) {
