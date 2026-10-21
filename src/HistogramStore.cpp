@@ -31,6 +31,11 @@ void HistogramStore::fill(const DecodedEvent& e) {
     }
     if (e.wave.samples && e.wave.length) {
         c.lastWave.assign(e.wave.samples, e.wave.samples + e.wave.length);
+        // A saturated pile-up event belongs to both kinds.
+        if (e.pileup) c.lastWavePileup.assign(e.wave.samples, e.wave.samples + e.wave.length);
+        if (e.satu)   c.lastWaveSatu.assign(e.wave.samples, e.wave.samples + e.wave.length);
+        if (!e.pileup && !e.satu)
+            c.lastWaveGood.assign(e.wave.samples, e.wave.samples + e.wave.length);
     }
     ++c.counts.events;
     if (e.pileup) ++c.counts.pileup;
@@ -71,6 +76,19 @@ std::vector<std::int16_t> HistogramStore::waveform(std::uint16_t board, std::uin
     std::lock_guard<std::mutex> lk(mtx_);
     const Channel* c = find(board, ch);
     return c ? c->lastWave : std::vector<std::int16_t>{};
+}
+
+std::vector<std::int16_t> HistogramStore::waveform(std::uint16_t board, std::uint16_t ch,
+                                                   WaveKind kind) const {
+    std::lock_guard<std::mutex> lk(mtx_);
+    const Channel* c = find(board, ch);
+    if (!c) return {};
+    switch (kind) {
+        case WaveKind::Good:      return c->lastWaveGood;
+        case WaveKind::Pileup:    return c->lastWavePileup;
+        case WaveKind::Saturated: return c->lastWaveSatu;
+        default:                  return c->lastWave;
+    }
 }
 
 std::uint64_t HistogramStore::events(std::uint16_t board, std::uint16_t ch) const {

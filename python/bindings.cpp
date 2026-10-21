@@ -271,6 +271,16 @@ PYBIND11_MODULE(caendaq, m) {
              "2D DPP-PSD histogram (uint32, shape [PSD_XBINS, PSD_YBINS]); empty until a PSD event.")
         .def("waveform",[](Daq& d, int b, int ch) { return toArray(d.histograms(b).waveform(b, ch)); },
              py::arg("board"), py::arg("channel"), "Latest waveform (int16 samples).")
+        .def("waveform_of",
+             [](Daq& d, int b, int ch, const std::string& kind) {
+                 using K = HistogramStore::WaveKind;
+                 K k = kind == "good" ? K::Good : kind == "pileup" ? K::Pileup
+                     : kind == "saturated" ? K::Saturated : K::Any;
+                 return toArray(d.histograms(b).waveform(b, ch, k));
+             },
+             py::arg("board"), py::arg("channel"), py::arg("kind"),
+             "Latest waveform of one kind of event: 'any', 'good' (no pile-up, not "
+             "saturated), 'pileup' or 'saturated'. Empty until such an event arrives.")
         .def("channel_events",
              [](Daq& d, int b, int ch) { return d.histograms(b).events(b, ch); },
              py::arg("board"), py::arg("channel"), "Number of events seen on (board, channel).")

@@ -45,6 +45,10 @@ public:
     // Empty until the channel receives a PSD event.
     std::vector<std::uint32_t> psd(std::uint16_t board, std::uint16_t ch) const;
     std::vector<std::int16_t>  waveform(std::uint16_t board, std::uint16_t ch) const;
+    // Latest waveform of one kind of event, so a viewer can show a pile-up
+    // trace, or a clean one, rather than whichever came last.
+    enum class WaveKind { Any = 0, Good = 1, Pileup = 2, Saturated = 3 };
+    std::vector<std::int16_t>  waveform(std::uint16_t board, std::uint16_t ch, WaveKind kind) const;
     std::uint64_t              events(std::uint16_t board, std::uint16_t ch) const;
     Counts                     counts(std::uint16_t board, std::uint16_t ch) const;
 
@@ -60,6 +64,9 @@ private:
         std::vector<std::uint32_t> qlong;
         std::vector<std::uint32_t> psd;      // flattened kPsdXBins × kPsdYBins
         std::vector<std::int16_t>  lastWave;
+        std::vector<std::int16_t>  lastWaveGood;    // neither pile-up nor saturated
+        std::vector<std::int16_t>  lastWavePileup;
+        std::vector<std::int16_t>  lastWaveSatu;
         Counts                     counts;
     };
 
